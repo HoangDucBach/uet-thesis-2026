@@ -6,11 +6,7 @@ use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 
-// === Constants ===
-
-const MIN_BOND: u64 = 1_000_000_000; // 1 SUI
-const COMMIT_DURATION_MS: u64 = 2000;
-const GRACE_PERIOD_MS: u64 = 5000;
+use cow_dex::config::{Self, GlobalConfig};
 
 // === Errors ===
 
@@ -112,18 +108,20 @@ public struct FallbackTriggeredEvent has copy, drop {
 /// Open a new batch auction.
 /// Permissionless — relay or anyone can call.
 ///
+/// * `config`: GlobalConfig for protocol parameters.
 /// * `batch_id`: Batch sequence number.
 /// * `intent_ids`: Vector of Intent IDs in this batch.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 public fun open_batch(
+    config: &GlobalConfig,
     batch_id: u64,
     intent_ids: vector<ID>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): AuctionState {
     let current_time_ms = clock.timestamp_ms();
-    let commit_end_ms = current_time_ms + COMMIT_DURATION_MS;
+    let commit_end_ms = current_time_ms + config::commit_duration_ms(config);
 
     AuctionState {
         id: object::new(ctx),
@@ -131,7 +129,7 @@ public fun open_batch(
         intent_ids,
         phase: AuctionPhase::Commit,
         commit_end_ms,
-        execute_deadline_ms: commit_end_ms + GRACE_PERIOD_MS,
+        execute_deadline_ms: commit_end_ms + config::grace_period_ms(config),
         commits: table::new(ctx),
         winner: std::option::none(),
         winner_score: 0,
@@ -144,12 +142,14 @@ public fun open_batch(
 /// Winner selected on-the-fly: highest score, earliest timestamp wins.
 /// No duplicate commits allowed.
 ///
+/// * `config`: GlobalConfig for protocol parameters.
 /// * `state`: AuctionState.
 /// * `score`: n_cow_pairs committed by solver.
 /// * `bond`: SUI bond for griefing protection.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 public fun commit(
+    config: &GlobalConfig,
     state: &mut AuctionState,
     score: u64,
     bond: Coin<SUI>,
@@ -159,7 +159,7 @@ public fun commit(
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
     assert!(current_time_ms < state.commit_end_ms, EInvalidDeadline);
-    assert!(coin::value(&bond) >= MIN_BOND, EBondTooSmall);
+    assert!(coin::value(&bond) >= config::min_bond(config), EBondTooSmall);
 
     let sender = ctx.sender();
     assert!(!table::contains(&state.commits, sender), EWrongPhase);
@@ -247,21 +247,26 @@ public fun open_settlement(
 }
 
 /// Process a single CoW pair intent.
-/// [v2.3] Takes Intent by value (deletes it — replay protection).
+/// [v2.3 Optimized] Uses 2 phantom types for type-safe SellCoin ↔ BuyCoin matching.
+/// Takes Intent by value (deletes it — replay protection).
 /// Verifies EBBO floor check.
 /// Increments actual_cow_pairs counter in ticket.
 /// Only holder of SettlementTicket can call (only winner has it).
 ///
 /// * `ticket`: SettlementTicket (must be mutable to increment counter).
-/// * `intent`: Intent (taken by value, deleted atomically).
-/// * `payout`: Solver's payout coin (from any source: flash, inventory).
+/// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
+/// * `payout`: Solver's payout coin of type BuyCoin (from any source: flash, inventory).
 /// * `min_required`: Minimum output required by user (intent.min_amount_out).
 /// * `ebbo_floor`: EBBO floor price (max(min_required, mid_price × sell × 99/100)).
 /// * `ctx`: Transaction context.
-public fun process_intent<T>(
+///
+/// Type Parameters:
+/// * `SellCoin`: Coin type user was selling.
+/// * `BuyCoin`: Coin type user is receiving.
+public fun process_intent<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
-    intent: cow_dex::intent_book::Intent<T>,
-    payout: Coin<T>,
+    intent: cow_dex::intent_book::Intent<SellCoin, BuyCoin>,
+    payout: Coin<BuyCoin>,
     min_required: u64,
     ebbo_floor: u64,
     ctx: &mut TxContext,

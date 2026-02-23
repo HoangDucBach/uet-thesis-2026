@@ -5,7 +5,7 @@ use sui::table::{Self, Table};
 // === Constants ===
 
 const INITIAL_VERSION: u64 = 1;
-const MAX_PROTOCOL_FEE_BPS: u64 = 10_000; // 100% in basis points
+const MAX_PROTOCOL_FEE_BPS: u64 = 10_000;
 
 // === Default Configuration Parameters ===
 

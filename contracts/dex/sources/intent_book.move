@@ -1,6 +1,5 @@
 module cow_dex::intent_book;
 
-use std::type_name::{Self, TypeName};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 
@@ -11,12 +10,11 @@ const ENotIntentOwner: u64 = 1;
 // === Events ===
 
 /// Emitted when user creates a new intent.
+/// [v2.3] Coin types are embedded in Intent<S, B>, not in event (Indexer reads types from MoveType)
 public struct IntentCreatedEvent has copy, drop {
     intent_id: ID,
     owner: address,
-    sell_type: TypeName,
     sell_amount: u64,
-    buy_type: TypeName,
     min_amount_out: u64,
     deadline: u64,
 }
@@ -31,25 +29,27 @@ public struct IntentCancelledEvent has copy, drop {
 // === Structs ===
 
 /// Shared object — user's coins locked inside until settlement or cancellation.
-/// [v2.3] Replaces IntentRegistry + off-chain relay model.
+/// [v2.3 Optimized] Uses 2 phantom types for type-safe SellCoin ↔ BuyCoin matching.
 /// Replay protection: Intent deleted via object::delete(id) in consume_intent()
 /// → Sui linear type system prevents double settlement.
 ///
 /// * `id`: Shared object ID.
 /// * `batch_id`: Optional — set when assigned to a batch.
 /// * `owner`: User address (creator).
-/// * `sell_balance`: Locked coins (user's asset during settlement period).
+/// * `sell_balance`: Locked coins of type SellCoin.
 /// * `sell_amount`: Amount to sell (for CoW matching).
-/// * `buy_type`: Token type expected in return.
-/// * `min_amount_out`: User's minimum acceptable output.
+/// * `min_amount_out`: User's minimum acceptable output (in BuyCoin).
 /// * `deadline`: Unix milliseconds — intent expires after this.
-public struct Intent<phantom T> has key {
+///
+/// Type Parameters:
+/// * `SellCoin`: Coin type user is selling (phantom, embedded in type).
+/// * `BuyCoin`: Coin type user wants to receive (phantom, embedded in type).
+public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
     id: UID,
     batch_id: Option<u64>,
     owner: address,
-    sell_balance: sui::balance::Balance<T>,
+    sell_balance: sui::balance::Balance<SellCoin>,
     sell_amount: u64,
-    buy_type: TypeName,
     min_amount_out: u64,
     deadline: u64,
 }
@@ -67,20 +67,23 @@ public struct IntentCap has key, store {
 // === Functions ===
 
 /// User creates a new intent, locking coins in a shared object.
-/// [v2.3] On-chain intake: coin locked immediately.
-/// Solver discovers via IntentCreatedEvent.
+/// [v2.3 Optimized] Uses 2 phantom types for type-safe SellCoin ↔ BuyCoin matching.
+/// On-chain intake: coin locked immediately.
+/// Solver discovers via IntentCreatedEvent (reads types from MoveType).
 /// Replay protection: Sui object deletion (Intent deleted in consume_intent).
 ///
-/// * `coin`: User's coin to trade.
-/// * `min_amount_out`: Minimum acceptable output.
-/// * `buy_type`: Type name of output token.
+/// * `coin`: User's coin to trade (type SellCoin).
+/// * `min_amount_out`: Minimum acceptable output (in BuyCoin).
 /// * `deadline`: Unix milliseconds deadline.
 /// * `clock`: Sui clock for deadline validation.
 /// * `ctx`: Transaction context.
-public fun create_intent<T>(
-    coin: Coin<T>,
+///
+/// Type Parameters:
+/// * `SellCoin`: Coin type user is selling.
+/// * `BuyCoin`: Coin type user wants to receive.
+public fun create_intent<SellCoin, BuyCoin>(
+    coin: Coin<SellCoin>,
     min_amount_out: u64,
-    buy_type: TypeName,
     deadline: u64,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -92,13 +95,12 @@ public fun create_intent<T>(
     let owner = ctx.sender();
     let sell_balance = coin::into_balance(coin);
 
-    let intent = Intent<T> {
+    let intent = Intent<SellCoin, BuyCoin> {
         id: object::new(ctx),
         batch_id: std::option::none(),
         owner,
         sell_balance,
         sell_amount,
-        buy_type,
         min_amount_out,
         deadline,
     };
@@ -115,9 +117,7 @@ public fun create_intent<T>(
     sui::event::emit(IntentCreatedEvent {
         intent_id,
         owner,
-        sell_type: type_name::with_defining_ids<T>(),
         sell_amount,
-        buy_type,
         min_amount_out,
         deadline,
     });
@@ -132,13 +132,17 @@ public fun create_intent<T>(
 /// * `cap`: IntentCap (owned, user holds).
 /// * `intent`: Intent object (shared, deleted here).
 /// * `ctx`: Transaction context.
-public fun cancel_intent<T>(
+///
+/// Type Parameters:
+/// * `SellCoin`: Coin type user is selling.
+/// * `BuyCoin`: Coin type user wanted to receive.
+public fun cancel_intent<SellCoin, BuyCoin>(
     cap: IntentCap,
-    intent: Intent<T>,
+    intent: Intent<SellCoin, BuyCoin>,
     ctx: &mut TxContext,
 ) {
     let IntentCap { id: cap_id, intent_id } = cap;
-    let Intent<T> { id, owner, sell_balance, sell_amount, .. } = intent;
+    let Intent<SellCoin, BuyCoin> { id, owner, sell_balance, sell_amount, .. } = intent;
 
     object::delete(cap_id);
     object::delete(id);
@@ -165,49 +169,48 @@ public fun cancel_intent<T>(
 ///
 /// * `intent`: Intent taken by value (deleted atomically).
 /// Returns: (owner address, sell_balance, min_amount_out)
-public(package) fun consume_intent<T>(
-    intent: Intent<T>,
-): (address, sui::balance::Balance<T>, u64) {
-    let Intent<T> {
+///
+/// Type Parameters:
+/// * `SellCoin`: Coin type user was selling.
+/// * `BuyCoin`: Coin type user wanted to receive.
+public(package) fun consume_intent<SellCoin, BuyCoin>(
+    intent: Intent<SellCoin, BuyCoin>,
+): (address, sui::balance::Balance<SellCoin>, u64) {
+    let Intent<SellCoin, BuyCoin> {
         id,
         owner,
         sell_balance,
         min_amount_out,
-        ..
+        ..,
     } = intent;
 
-    object::delete(id);  // ← shared object deleted — replay impossible
+    object::delete(id); // ← shared object deleted — replay impossible
     (owner, sell_balance, min_amount_out)
 }
 
 // === Getters ===
 
 /// Get intent owner.
-public fun owner<T>(intent: &Intent<T>): address {
+public fun owner<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): address {
     intent.owner
 }
 
 /// Get sell amount.
-public fun sell_amount<T>(intent: &Intent<T>): u64 {
+public fun sell_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.sell_amount
 }
 
-/// Get minimum output required.
-public fun min_amount_out<T>(intent: &Intent<T>): u64 {
+/// Get minimum output required (in BuyCoin).
+public fun min_amount_out<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.min_amount_out
 }
 
 /// Get deadline in milliseconds.
-public fun deadline<T>(intent: &Intent<T>): u64 {
+public fun deadline<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.deadline
 }
 
-/// Get buy token type.
-public fun buy_type<T>(intent: &Intent<T>): TypeName {
-    intent.buy_type
-}
-
 /// Get batch ID if assigned.
-public fun batch_id<T>(intent: &Intent<T>): Option<u64> {
+public fun batch_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): Option<u64> {
     intent.batch_id
 }
