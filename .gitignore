@@ -1,6 +1,9 @@
 # Environment variables
 .env
 
+# Package manager files
+node_modules/
+
 # IDE settings
 .vscode/
 .idea/
