@@ -1,12 +1,12 @@
 module cow_dex::settlement;
 
+use cow_dex::config::GlobalConfig;
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
+use sui::event::emit;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
-
-use cow_dex::config::{Self, GlobalConfig};
 
 // === Errors ===
 
@@ -57,7 +57,7 @@ public struct CommitEntry has store {
 /// * `id`: Unique object ID.
 /// * `batch_id`: Batch sequence number.
 /// * `intent_ids`: Vector of Intent IDs in this batch.
-/// * `phase`: Current phase (Commit, Execute, Done, Failed).
+/// * `phase`: Current phase.
 /// * `commit_end_ms`: Deadline for commit phase.
 /// * `execute_deadline_ms`: Deadline for execution (commit_end + grace).
 /// * `commits`: Table of solver commitments.
@@ -121,7 +121,7 @@ public fun open_batch(
     ctx: &mut TxContext,
 ): AuctionState {
     let current_time_ms = clock.timestamp_ms();
-    let commit_end_ms = current_time_ms + config::commit_duration_ms(config);
+    let commit_end_ms = current_time_ms + config.commit_duration_ms();
 
     AuctionState {
         id: object::new(ctx),
@@ -129,7 +129,7 @@ public fun open_batch(
         intent_ids,
         phase: AuctionPhase::Commit,
         commit_end_ms,
-        execute_deadline_ms: commit_end_ms + config::grace_period_ms(config),
+        execute_deadline_ms: commit_end_ms + config.grace_period_ms(),
         commits: table::new(ctx),
         winner: std::option::none(),
         winner_score: 0,
@@ -159,7 +159,7 @@ public fun commit(
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
     assert!(current_time_ms < state.commit_end_ms, EInvalidDeadline);
-    assert!(coin::value(&bond) >= config::min_bond(config), EBondTooSmall);
+    assert!(coin::value(&bond) >= config.min_bond(), EBondTooSmall);
 
     let sender = ctx.sender();
     assert!(!table::contains(&state.commits, sender), EWrongPhase);
@@ -200,7 +200,6 @@ public fun commit(
 }
 
 /// Close commit phase and transition to Execute phase.
-/// Emits WinnerSelectedEvent.
 ///
 /// * `state`: AuctionState.
 /// * `clock`: Sui clock.
@@ -211,7 +210,7 @@ public fun close_commits(state: &mut AuctionState, clock: &Clock) {
 
     state.phase = AuctionPhase::Execute;
 
-    sui::event::emit(WinnerSelectedEvent {
+    emit(WinnerSelectedEvent {
         batch_id: state.batch_id,
         winner: *std::option::borrow(&state.winner),
         winner_score: state.winner_score,
@@ -331,7 +330,7 @@ public fun close_settlement(
 
     state.phase = AuctionPhase::Done;
 
-    sui::event::emit(SettlementCompleteEvent {
+    emit(SettlementCompleteEvent {
         batch_id: state.batch_id,
         winner,
         actual_cow_pairs,
@@ -345,6 +344,7 @@ public fun close_settlement(
 /// * `state`: AuctionState.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
+#[allow(lint(self_transfer))]
 public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut TxContext) {
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
@@ -364,7 +364,7 @@ public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut T
 
     state.phase = AuctionPhase::Failed;
 
-    sui::event::emit(FallbackTriggeredEvent {
+    emit(FallbackTriggeredEvent {
         batch_id: state.batch_id,
         winner,
         bond_slashed: slashed_amount,
@@ -393,32 +393,32 @@ public fun withdraw_losing_bond(state: &mut AuctionState, ctx: &mut TxContext) {
 // === Getters ===
 
 /// Get current phase.
-public fun get_phase(state: &AuctionState): AuctionPhase {
+public fun phase(state: &AuctionState): AuctionPhase {
     state.phase
 }
 
 /// Get batch ID.
-public fun get_batch_id(state: &AuctionState): u64 {
+public fun batch_id(state: &AuctionState): u64 {
     state.batch_id
 }
 
 /// Get winning solver address.
-public fun get_winner(state: &AuctionState): Option<address> {
+public fun winner(state: &AuctionState): Option<address> {
     state.winner
 }
 
 /// Get winner's committed score.
-public fun get_winner_score(state: &AuctionState): u64 {
+public fun winner_score(state: &AuctionState): u64 {
     state.winner_score
 }
 
 /// Get commit phase deadline.
-public fun get_commit_end_ms(state: &AuctionState): u64 {
+public fun commit_end_ms(state: &AuctionState): u64 {
     state.commit_end_ms
 }
 
 /// Get execution deadline (commit_end + grace).
-public fun get_execute_deadline_ms(state: &AuctionState): u64 {
+public fun execute_deadline_ms(state: &AuctionState): u64 {
     state.execute_deadline_ms
 }
 

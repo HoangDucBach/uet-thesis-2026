@@ -5,21 +5,21 @@ use sui::event;
 // === Events ===
 
 /// Settlement event emitted after successful settlement.
-/// Contains all benchmark data required for H1-H5 hypothesis validation.
+/// Contains all benchmark data required for    .
 /// * `batch_id`: Batch sequence number.
 /// * `n_intents`: Total number of intents in the batch.
 /// * `n_cow_pairs`: Number of intents matched via CoW.
-/// * `cow_rate_bps`: CoW rate in basis points (0-10000).
+/// * `cow_rate_bps`: CoW rate in bps.
 /// * `total_surplus_sui`: Total surplus generated in SUI (scaled).
 /// * `flash_amount`: Total flash loan amount.
-/// * `flash_fee`: NAVI flash fee charged (estimated).
+/// * `flash_fee`: Flash fee charged (estimated).
 /// * `gas_used`: Total gas used in settlement.
 /// * `solver`: Address of the winning solver.
 /// * `winning_score`: Surplus score of winning solution.
 /// * `runner_up_score`: Surplus score of second-best solution (0 if none).
 /// * `n_solvers_committed`: Number of solvers who committed.
 /// * `n_solvers_revealed`: Number of solvers who revealed.
-/// * `n_shared_obj_writes`: Estimated shared object writes (for Theorem 4 contention measurement).
+/// * `n_shared_obj_writes`: Estimated shared object writes.
 /// * `timestamp_ms`: Unix milliseconds when settlement completed.
 public struct SettlementEvent has copy, drop {
     batch_id: u64,
@@ -43,7 +43,7 @@ public struct SettlementEvent has copy, drop {
 /// * `batch_id`: Batch sequence number.
 /// * `n_intents`: Total intents in batch.
 /// * `n_cow_pairs`: Number of CoW pairs.
-/// * `cow_rate_bps`: CoW rate (0-10000 basis points).
+/// * `cow_rate_bps`: CoW rate.
 /// * `total_surplus_sui`: Total surplus in SUI.
 /// * `flash_amount`: Flash loan amount.
 /// * `flash_fee`: Flash fee.
