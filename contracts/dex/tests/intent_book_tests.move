@@ -168,10 +168,11 @@ fun test_consume_intent_returns_correct_fields() {
     assert!(intent_book::sell_amount(&intent) == 750);
     assert!(intent_book::min_amount_out(&intent) == 300);
 
-    let (owner, out_balance, min_out) = intent_book::consume_intent<SUI, USDC>(intent);
+    let (owner, out_balance, min_out, sell_amount) = intent_book::consume_intent<SUI, USDC>(intent);
 
     assert!(owner == user);
     assert!(min_out == 300);
+    assert!(sell_amount == 750);
 
     std::unit_test::destroy(out_balance);
     ts::end(scenario);

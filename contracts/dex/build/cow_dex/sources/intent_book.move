@@ -1,6 +1,6 @@
 module cow_dex::intent_book;
 
-use sui::balance::{Self, Balance};
+use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::event::emit;
@@ -154,24 +154,25 @@ public fun cancel_intent<SellCoin, BuyCoin>(
 /// Sui linear type system guarantees deletion is irreversible.
 ///
 /// * `intent`: Intent taken by value (deleted atomically).
-/// Returns: (owner address, sell_balance, min_amount_out)
+/// Returns: (owner address, sell_balance, min_amount_out, sell_amount)
 ///
 /// Type Parameters:
 /// * `SellCoin`: Coin type user was selling.
 /// * `BuyCoin`: Coin type user wanted to receive.
 public(package) fun consume_intent<SellCoin, BuyCoin>(
     intent: Intent<SellCoin, BuyCoin>,
-): (address, Balance<SellCoin>, u64) {
+): (address, Balance<SellCoin>, u64, u64) {
     let Intent<SellCoin, BuyCoin> {
         id,
         owner,
         sell_balance,
+        sell_amount,
         min_amount_out,
         ..,
     } = intent;
 
     object::delete(id); // shared object deleted — replay impossible
-    (owner, sell_balance, min_amount_out)
+    (owner, sell_balance, min_amount_out, sell_amount)
 }
 
 // === Getters ===

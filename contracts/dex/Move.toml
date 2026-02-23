@@ -3,3 +3,4 @@ name = "cow_dex"
 edition = "2024"
 
 [dependencies]
+deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "main" }

@@ -14,6 +14,12 @@ const DEFAULT_COMMIT_DURATION_MS: u64 = 2000; // 2 seconds
 const DEFAULT_GRACE_PERIOD_MS: u64 = 5000; // 5 seconds
 const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
 
+// === Upper Bounds (Overflow Protection) ===
+
+const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1 trillion base units (~max reasonable bond)
+const MAX_COMMIT_DURATION_MS: u64 = 604_800_000; // 7 days in milliseconds
+const MAX_GRACE_PERIOD_MS: u64 = 604_800_000; // 7 days in milliseconds
+
 // === ACL Roles ===
 
 const ROLE_CONFIG_ADMIN: u64 = 0;
@@ -123,6 +129,7 @@ public fun init_config(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
 /// * `_cap`: AdminCap for authorization.
 public fun set_min_bond(config: &mut GlobalConfig, new_min_bond: u64, _cap: &AdminCap) {
     assert!(new_min_bond > 0, EInvalidBondAmount);
+    assert!(new_min_bond <= MAX_MIN_BOND, EInvalidBondAmount);
 
     let old_value = config.min_bond;
     config.min_bond = new_min_bond;
@@ -143,6 +150,7 @@ public fun set_commit_duration(
     _cap: &AdminCap,
 ) {
     assert!(new_commit_duration_ms > 0, EInvalidDuration);
+    assert!(new_commit_duration_ms <= MAX_COMMIT_DURATION_MS, EInvalidDuration);
 
     let old_value = config.commit_duration_ms;
     config.commit_duration_ms = new_commit_duration_ms;
@@ -159,6 +167,7 @@ public fun set_commit_duration(
 /// * `_cap`: AdminCap for authorization.
 public fun set_grace_period(config: &mut GlobalConfig, new_grace_period_ms: u64, _cap: &AdminCap) {
     assert!(new_grace_period_ms > 0, EInvalidDuration);
+    assert!(new_grace_period_ms <= MAX_GRACE_PERIOD_MS, EInvalidDuration);
 
     let old_value = config.grace_period_ms;
     config.grace_period_ms = new_grace_period_ms;

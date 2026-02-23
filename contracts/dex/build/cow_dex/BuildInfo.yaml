@@ -3,12 +3,12 @@ compiled_package_info:
   package_name: cow_dex
   build_flags:
     test_mode: false
-    generate_docs: true
+    generate_docs: false
     save_disassembly: false
     install_dir: ~
     force_recompilation: false
     allow_dirty: false
-    default_flavor: ~
+    default_flavor: sui
     default_edition: ~
     silence_warnings: false
     warnings_are_errors: false
@@ -25,3 +25,5 @@ compiled_package_info:
 dependencies:
   - MoveStdlib
   - Sui
+  - deepbook
+  - token

@@ -19,5 +19,17 @@ deps = { MoveStdlib = "MoveStdlib" }
 [pinned.testnet.cow_dex]
 source = { root = true }
 use_environment = "testnet"
+manifest_digest = "EF55A39C03806D44F7224057AF3F6B7DC7E067950C63BB52702F3BF5557FC743"
+deps = { deepbook = "deepbook", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.testnet.deepbook]
+source = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "1108a55bd52b5562bcca3d9f77db402a1c60710a" }
+use_environment = "testnet"
+manifest_digest = "3101923B9428545A4F52FFAD1C4F959F9BFFF84CD09CE4BCC1CB831286999B5A"
+deps = { std = "MoveStdlib", sui = "Sui", token = "token" }
+
+[pinned.testnet.token]
+source = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/token", rev = "1108a55bd52b5562bcca3d9f77db402a1c60710a" }
+use_environment = "testnet"
 manifest_digest = "5745706258F61D6CE210904B3E6AE87A73CE9D31A6F93BE4718C442529332A87"
 deps = { std = "MoveStdlib", sui = "Sui" }

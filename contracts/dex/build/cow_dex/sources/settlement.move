@@ -1,6 +1,7 @@
 module cow_dex::settlement;
 
 use cow_dex::config::GlobalConfig;
+use deepbook::pool::Pool as DeepbookPool;
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
@@ -8,16 +9,20 @@ use sui::event::emit;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 
+// === Constants ===
+
+const FLOAT_SCALING: u128 = 1_000_000_000;
+
 // === Errors ===
 
 const EWrongPhase: u64 = 0;
 const EBondTooSmall: u64 = 1;
-const EOutputInsufficient: u64 = 2;
-const EClearingPriceMismatch: u64 = 3;
-const ENotWinner: u64 = 4;
-const EScoreMismatch: u64 = 5;
-const EInvalidDeadline: u64 = 6;
-const EWrongBatch: u64 = 7;
+const EClearingPriceMismatch: u64 = 2;
+const ENotWinner: u64 = 3;
+const EScoreMismatch: u64 = 4;
+const EInvalidDeadline: u64 = 5;
+const EWrongBatch: u64 = 6;
+const ENoCommits: u64 = 7;
 
 // === Enums ===
 
@@ -207,12 +212,13 @@ public fun close_commits(state: &mut AuctionState, clock: &Clock) {
     let current_time_ms = clock.timestamp_ms();
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     assert!(current_time_ms >= state.commit_end_ms, EInvalidDeadline);
+    assert!(option::is_some(&state.winner), ENoCommits);
 
     state.phase = AuctionPhase::Execute;
 
     emit(WinnerSelectedEvent {
         batch_id: state.batch_id,
-        winner: *std::option::borrow(&state.winner),
+        winner: *option::borrow(&state.winner),
         winner_score: state.winner_score,
         runner_up: state.runner_up,
         runner_up_score: state.runner_up_score,
@@ -248,49 +254,68 @@ public fun open_settlement(
 /// Process a single CoW pair intent.
 /// [v2.3 Optimized] Uses 2 phantom types for type-safe SellCoin ↔ BuyCoin matching.
 /// Takes Intent by value (deletes it — replay protection).
-/// Verifies EBBO floor check.
+/// Calculates EBBO floor on-chain using DeepBook pool (solver cannot fake prices).
 /// Increments actual_cow_pairs counter in ticket.
 /// Only holder of SettlementTicket can call (only winner has it).
 ///
 /// * `ticket`: SettlementTicket (must be mutable to increment counter).
 /// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
 /// * `payout`: Solver's payout coin of type BuyCoin (from any source: flash, inventory).
-/// * `min_required`: Minimum output required by user (intent.min_amount_out).
-/// * `ebbo_floor`: EBBO floor price (max(min_required, mid_price × sell × 99/100)).
+/// * `pool`: DeepBook pool for on-chain price verification (immutable).
+/// * `clock`: Sui clock for DeepBook mid_price calculation.
 /// * `ctx`: Transaction context.
 ///
 /// Type Parameters:
-/// * `SellCoin`: Coin type user was selling.
-/// * `BuyCoin`: Coin type user is receiving.
+/// * `SellCoin`: Coin type user was selling (user input locked in Intent).
+/// * `BuyCoin`: Coin type user is receiving (payout coin provided by solver).
+#[allow(lint(self_transfer))]
 public fun process_intent<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
     intent: cow_dex::intent_book::Intent<SellCoin, BuyCoin>,
     payout: Coin<BuyCoin>,
-    min_required: u64,
-    ebbo_floor: u64,
+    pool: &DeepbookPool<SellCoin, BuyCoin>,
+    clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    // Verify intent belongs to this batch
+    // 1. Verify intent belongs to this batch
     let intent_batch_id = cow_dex::intent_book::batch_id(&intent);
-    assert!(std::option::is_some(&intent_batch_id), EWrongBatch);
-    assert!(*std::option::borrow(&intent_batch_id) == ticket.batch_id, EWrongBatch);
+    assert!(option::is_some(&intent_batch_id), EWrongBatch);
+    assert!(*option::borrow(&intent_batch_id) == ticket.batch_id, EWrongBatch);
 
-    // Check EBBO: actual payout >= max(min_required, ebbo_floor)
+    // 2. Consume intent on-chain (deleted — replay impossible by Sui linear types)
+    let (owner, sell_balance, min_amount_out, sell_amount) = cow_dex::intent_book::consume_intent(
+        intent,
+    );
+
+    // 3. Calculate EBBO floor on-chain using DeepBook mid_price
+    let mid_price = deepbook::pool::mid_price(pool, clock);
+
+    // fair_out = sell_amount * mid_price / FLOAT_SCALING (raw math, no decimals needed)
+    let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / FLOAT_SCALING;
+
+    // Safety check: prevent overflow when casting back to u64
+    assert!(fair_out_u128 <= (9_223_372_036_854_775_807u128), EClearingPriceMismatch); // i64::MAX
+    let fair_out = (fair_out_u128 as u64);
+
+    // ebbo_floor = max(min_amount_out, fair_out * 99%)
+    // Do slippage calculation in u128 to prevent overflow
+    let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
+    assert!(slippage_u128 <= (9_223_372_036_854_775_807u128), EClearingPriceMismatch);
+    let slippage_protection = (slippage_u128 as u64);
+    let ebbo_floor = max_u64(min_amount_out, slippage_protection);
+
+    // 4. Verify payout meets floor (solver cannot fake prices)
     let actual = coin::value(&payout);
-    assert!(actual >= min_required, EOutputInsufficient);
     assert!(actual >= ebbo_floor, EClearingPriceMismatch);
 
-    // Consume intent (deletes it — Sui linear type system prevents replay)
-    let (owner, sell_balance, _) = cow_dex::intent_book::consume_intent(intent);
-
-    // Transfer payout to user
+    // 5. Transfer payout to user (owned object, fast path)
     transfer::public_transfer(payout, owner);
 
-    // Return sell coins to caller (winner solver)
+    // 6. Return sell coins to solver
     let sell_coin = coin::from_balance(sell_balance, ctx);
     transfer::public_transfer(sell_coin, ctx.sender());
 
-    // Increment actual CoW pair counter
+    // 7. Increment actual CoW pair counter
     ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
 }
 
@@ -452,6 +477,13 @@ public fun is_done_phase(state: &AuctionState): bool {
 
 public fun is_failed_phase(state: &AuctionState): bool {
     state.phase == AuctionPhase::Failed
+}
+
+// === Helper Functions ===
+
+/// Return maximum of two u64 values.
+fun max_u64(a: u64, b: u64): u64 {
+    if (a > b) a else b
 }
 
 // === Test Helpers ===
