@@ -1,0 +1,55 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36" version="29.5.2">
+  <diagram name="Page-1" id="iuTv9SkPT37-VjptzHFy">
+    <mxGraphModel dx="2151" dy="895" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="GeFFQV7cVipeLvYW5beF-5" parent="1" style="shape=umlFrame;whiteSpace=wrap;html=1;pointerEvents=0;recursiveResize=0;container=1;collapsible=0;width=160;" value="System" vertex="1">
+          <mxGeometry height="560" width="600" x="80" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-6" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Create intent" vertex="1">
+          <mxGeometry height="40" width="100" x="160" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-9" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Cancel intent" vertex="1">
+          <mxGeometry height="40" width="100" x="160" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-10" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Open batch" vertex="1">
+          <mxGeometry height="40" width="100" x="160" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-11" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Commit" vertex="1">
+          <mxGeometry height="40" width="100" x="160" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-12" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Close commits" vertex="1">
+          <mxGeometry height="40" width="100" x="320" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-13" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Open settlement" vertex="1">
+          <mxGeometry height="40" width="120" x="320" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-14" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Process intent" vertex="1">
+          <mxGeometry height="40" width="120" x="320" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-15" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Close settlement" vertex="1">
+          <mxGeometry height="40" width="120" x="320" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-23" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="Sign intent" vertex="1">
+          <mxGeometry height="40" width="90" x="170" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-24" parent="GeFFQV7cVipeLvYW5beF-5" style="ellipse;whiteSpace=wrap;html=1;" value="View intent details" vertex="1">
+          <mxGeometry height="40" width="120" x="50" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-16" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" value="Trader" vertex="1">
+          <mxGeometry height="60" width="30" x="-50" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-18" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" value="Solver" vertex="1">
+          <mxGeometry height="60" width="30" x="-50" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-19" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" value="Solver" vertex="1">
+          <mxGeometry height="60" width="30" x="760" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="GeFFQV7cVipeLvYW5beF-22" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" value="Deepbook" vertex="1">
+          <mxGeometry height="60" width="30" x="760" y="480" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
