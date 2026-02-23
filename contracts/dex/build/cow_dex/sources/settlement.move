@@ -2,24 +2,29 @@ module cow_dex::settlement;
 
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
+use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 
 // === Constants ===
-const MIN_BOND: u64 = 1_000_000_000; // 1 SUI (scaled)
+
+const MIN_BOND: u64 = 1_000_000_000; // 1 SUI
 const COMMIT_DURATION_MS: u64 = 2000;
 const GRACE_PERIOD_MS: u64 = 5000;
 
 // === Errors ===
+
 const EWrongPhase: u64 = 0;
-const EBondTooSmall: u64 = 2;
-const EOutputInsufficient: u64 = 3;
-const EClearingPriceMismatch: u64 = 4;
-const ENotWinner: u64 = 5;
-const EScoreMismatch: u64 = 6;
-const EInvalidDeadline: u64 = 7;
+const EBondTooSmall: u64 = 1;
+const EOutputInsufficient: u64 = 2;
+const EClearingPriceMismatch: u64 = 3;
+const ENotWinner: u64 = 4;
+const EScoreMismatch: u64 = 5;
+const EInvalidDeadline: u64 = 6;
+const EWrongBatch: u64 = 7;
 
 // === Enums ===
+
 public enum AuctionPhase has copy, drop, store {
     Commit,
     Execute,
@@ -29,54 +34,87 @@ public enum AuctionPhase has copy, drop, store {
 
 // === Structs ===
 
-/// FlashLoan receipt - Hot Potato, must be consumed by flash_repay.
-/// Has no drop/store/key/copy abilities to enforce consumption.
-public struct FlashLoan {
-    amount: u64,
+/// Hot Potato — no abilities. Forces completion of settlement.
+/// Must be consumed by close_settlement() or PTB validation fails.
+/// Tracks actual CoW pairs delivered.
+///
+/// * `batch_id`: Batch this ticket is for.
+/// * `committed_score`: Winner's committed n_cow_pairs count.
+/// * `actual_cow_pairs`: Incremented per process_intent() call.
+public struct SettlementTicket {
+    batch_id: u64,
+    committed_score: u64,
+    actual_cow_pairs: u64,
 }
 
-/// A commitment submitted during commit phase.
-/// * `score`: Number of CoW pairs committed by solver.
-/// * `bond`: SUI balance serving as griefing protection.
-/// * `timestamp`: When this commitment was submitted.
+/// Commitment entry for a solver in commit phase.
+/// * `score`: Number of CoW pairs committed.
+/// * `bond`: SUI balance for griefing protection.
+/// * `timestamp`: When committed (for tiebreaker).
 public struct CommitEntry has store {
     score: u64,
     bond: Balance<SUI>,
     timestamp: u64,
 }
 
-
-/// State machine for a single batch auction.
-/// * `id`: Unique identifier of this auction.
+/// Batch auction state machine.
+/// * `id`: Unique object ID.
 /// * `batch_id`: Batch sequence number.
-/// * `intent_ids`: List of intents in this batch.
-/// * `phase`: Current auction phase (Commit, Execute, Done, Failed).
-/// * `commit_end_ms`: Timestamp when commit phase ends.
-/// * `grace_end_ms`: Timestamp when grace period (for execution) ends.
-/// * `commits`: Table of commit entries by solver address (stores score, bond, timestamp).
-/// * `winner`: Address of the winning solver (highest score, earliest timestamp).
-/// * `actual_cow_pairs`: Count of CoW pairs actually executed (populated during execute phase).
-/// * `version`: Incremented on critical parameter changes.
-public struct AuctionState has key, store {
+/// * `intent_ids`: Vector of Intent IDs in this batch.
+/// * `phase`: Current phase (Commit, Execute, Done, Failed).
+/// * `commit_end_ms`: Deadline for commit phase.
+/// * `execute_deadline_ms`: Deadline for execution (commit_end + grace).
+/// * `commits`: Table of solver commitments.
+/// * `winner`: Winning solver address.
+/// * `winner_score`: Winning score.
+public struct AuctionState has key {
     id: UID,
     batch_id: u64,
     intent_ids: vector<ID>,
     phase: AuctionPhase,
     commit_end_ms: u64,
-    grace_end_ms: u64,
+    execute_deadline_ms: u64,
     commits: Table<address, CommitEntry>,
     winner: Option<address>,
+    winner_score: u64,
+    runner_up: Option<address>,
+    runner_up_score: u64,
+}
+
+// === Events ===
+
+/// Emitted when winner is selected after commit phase closes.
+public struct WinnerSelectedEvent has copy, drop {
+    batch_id: u64,
+    winner: address,
+    winner_score: u64,
+    runner_up: Option<address>,
+    runner_up_score: u64,
+}
+
+/// Emitted when settlement completes successfully.
+public struct SettlementCompleteEvent has copy, drop {
+    batch_id: u64,
+    winner: address,
     actual_cow_pairs: u64,
-    version: u64,
+    committed_score: u64,
+}
+
+/// Emitted when fallback is triggered (winner failed to execute).
+public struct FallbackTriggeredEvent has copy, drop {
+    batch_id: u64,
+    winner: address,
+    bond_slashed: u64,
 }
 
 // === Functions ===
 
-/// Open a new batch auction (v2.2 Score-Commit design).
-/// Sets commit_end_ms = now + 2000ms and grace_end_ms = commit_end_ms + 5000ms.
-/// * `batch_id`: The batch sequence number.
-/// * `intent_ids`: Vector of intent IDs in this batch.
-/// * `clock`: Sui clock for timestamp.
+/// Open a new batch auction.
+/// Permissionless — relay or anyone can call.
+///
+/// * `batch_id`: Batch sequence number.
+/// * `intent_ids`: Vector of Intent IDs in this batch.
+/// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 public fun open_batch(
     batch_id: u64,
@@ -86,150 +124,265 @@ public fun open_batch(
 ): AuctionState {
     let current_time_ms = clock.timestamp_ms();
     let commit_end_ms = current_time_ms + COMMIT_DURATION_MS;
+
     AuctionState {
         id: object::new(ctx),
         batch_id,
         intent_ids,
         phase: AuctionPhase::Commit,
         commit_end_ms,
-        grace_end_ms: commit_end_ms + GRACE_PERIOD_MS,
+        execute_deadline_ms: commit_end_ms + GRACE_PERIOD_MS,
         commits: table::new(ctx),
         winner: std::option::none(),
-        actual_cow_pairs: 0,
-        version: 0,
+        winner_score: 0,
+        runner_up: std::option::none(),
+        runner_up_score: 0,
     }
 }
 
-/// Submit a score commitment during the commit phase (v2.2).
-/// Solver commits to achieving exactly `score` CoW pairs.
-/// Winner selected on-the-fly by highest score; ties broken by earliest timestamp.
-/// Bond is held until after execution or fallback.
-/// * `state`: The AuctionState.
-/// * `score`: Number of CoW pairs committed.
-/// * `bond`: SUI balance for griefing protection.
+/// Submit a score commitment during commit phase.
+/// Winner selected on-the-fly: highest score, earliest timestamp wins.
+/// No duplicate commits allowed.
+///
+/// * `state`: AuctionState.
+/// * `score`: n_cow_pairs committed by solver.
+/// * `bond`: SUI bond for griefing protection.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 public fun commit(
     state: &mut AuctionState,
     score: u64,
-    bond: Balance<SUI>,
+    bond: Coin<SUI>,
     clock: &Clock,
     ctx: &TxContext,
 ) {
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
-    assert!(current_time_ms < state.commit_end_ms, EWrongPhase);
-    assert!(balance::value(&bond) >= MIN_BOND, EBondTooSmall);
+    assert!(current_time_ms < state.commit_end_ms, EInvalidDeadline);
+    assert!(coin::value(&bond) >= MIN_BOND, EBondTooSmall);
 
     let sender = ctx.sender();
-    let commit_entry = CommitEntry {
+    assert!(!table::contains(&state.commits, sender), EWrongPhase);
+
+    let entry = CommitEntry {
         score,
-        bond,
+        bond: coin::into_balance(bond),
         timestamp: current_time_ms,
     };
-    table::add(&mut state.commits, sender, commit_entry);
+    table::add(&mut state.commits, sender, entry);
 
-    // Update winner if this commit is better (higher score, or same score but earlier timestamp)
+    // Update winner on-the-fly (highest score, earliest timestamp for ties)
     if (std::option::is_none(&state.winner)) {
         state.winner = std::option::some(sender);
+        state.winner_score = score;
     } else {
         let current_winner = *std::option::borrow(&state.winner);
-        let current_winner_entry = table::borrow(&state.commits, current_winner);
-        let current_winner_score = current_winner_entry.score;
-        let current_winner_timestamp = current_winner_entry.timestamp;
+        let entry_ref = table::borrow(&state.commits, current_winner);
+        let current_winner_timestamp = entry_ref.timestamp;
 
-        if (score > current_winner_score) {
+        if (score > state.winner_score) {
+            // New winner is better
+            state.runner_up = std::option::some(current_winner);
+            state.runner_up_score = state.winner_score;
             state.winner = std::option::some(sender);
-        } else if (score == current_winner_score && current_time_ms < current_winner_timestamp) {
+            state.winner_score = score;
+        } else if (score > state.runner_up_score) {
+            // Not better than winner, but better than runner-up
+            state.runner_up = std::option::some(sender);
+            state.runner_up_score = score;
+        } else if (score == state.winner_score && current_time_ms < current_winner_timestamp) {
+            // Tie with winner, but earlier timestamp
+            state.runner_up = std::option::some(current_winner);
+            state.runner_up_score = state.winner_score;
             state.winner = std::option::some(sender);
         };
     };
 }
 
-/// Close commit phase and transition to Execute phase (v2.2).
-/// Called after commit_end_ms. Winner has been selected on-the-fly during commit phase.
-/// Bond is NOT returned yet; retained until execution or fallback.
-/// * `state`: The AuctionState.
+/// Close commit phase and transition to Execute phase.
+/// Emits WinnerSelectedEvent.
+///
+/// * `state`: AuctionState.
 /// * `clock`: Sui clock.
 public fun close_commits(state: &mut AuctionState, clock: &Clock) {
     let current_time_ms = clock.timestamp_ms();
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     assert!(current_time_ms >= state.commit_end_ms, EInvalidDeadline);
 
-    // Transition to Execute phase
     state.phase = AuctionPhase::Execute;
+
+    sui::event::emit(WinnerSelectedEvent {
+        batch_id: state.batch_id,
+        winner: *std::option::borrow(&state.winner),
+        winner_score: state.winner_score,
+        runner_up: state.runner_up,
+        runner_up_score: state.runner_up_score,
+    });
 }
 
-/// Verify and transfer a single CoW pair output (v2.2).
-/// Called per CoW pair during Execute phase.
-/// Checks EBBO floor: actual_output >= clearing_price (with documented limitation for spot volatility).
-/// Increments actual_cow_pairs counter.
-/// * `state`: The AuctionState.
-/// * `actual_output`: Actual amount received from CoW pair.
-/// * `min_required`: Minimum required by user intent.
-/// * `clearing_price`: Uniform clearing price for this token pair.
+/// Winner calls to open settlement and receive Hot Potato ticket.
+/// Only winner can call (capability check).
+///
+/// * `state`: AuctionState.
+/// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
-public fun verify_and_transfer(
+public fun open_settlement(
     state: &mut AuctionState,
-    actual_output: u64,
-    min_required: u64,
-    clearing_price: u64,
-) {
+    clock: &Clock,
+    ctx: &TxContext,
+): SettlementTicket {
+    let current_time_ms = clock.timestamp_ms();
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
-
-    // Verify output meets user's minimum requirement
-    assert!(actual_output >= min_required, EOutputInsufficient);
-
-    // Check EBBO floor (actual >= clearing_price)
-    // Note: This check assumes mid-price stability; spot price volatility over 5s may cause false positives
-    assert!(actual_output >= clearing_price, EClearingPriceMismatch);
-
-    // Increment actual CoW pair counter
-    state.actual_cow_pairs = state.actual_cow_pairs + 1;
-}
-
-/// Finalize auction and consume FlashLoan Hot Potato (v2.2).
-/// Verifies actual_cow_pairs >= committed score from winner.
-/// Must be called as last command in settlement PTB before flash_repay.
-/// Consuming FlashLoan ensures flash loan was properly repaid.
-/// * `state`: The AuctionState.
-/// * `flash_receipt`: FlashLoan Hot Potato to be consumed.
-public fun finalize_and_check(state: &mut AuctionState, flash_receipt: FlashLoan) {
-    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
+    assert!(current_time_ms <= state.execute_deadline_ms, EInvalidDeadline);
     assert!(std::option::is_some(&state.winner), ENotWinner);
 
     let winner = *std::option::borrow(&state.winner);
-    let winner_entry = table::borrow(&state.commits, winner);
-    let committed_score = winner_entry.score;
+    assert!(winner == ctx.sender(), ENotWinner);
 
-    // Verify actual_cow_pairs >= committed_score
-    assert!(state.actual_cow_pairs >= committed_score, EScoreMismatch);
-
-    // Consume FlashLoan Hot Potato
-    let FlashLoan { amount: _ } = flash_receipt;
-
-    state.phase = AuctionPhase::Done;
+    SettlementTicket {
+        batch_id: state.batch_id,
+        committed_score: state.winner_score,
+        actual_cow_pairs: 0,
+    }
 }
 
-/// Trigger fallback if winner fails to execute within grace period (v2.2).
-/// Slashes winner's bond.
-/// Transitions to Failed phase.
-/// Note: Bond is held in AuctionState; protocol should clean up via separate function.
-/// * `state`: The AuctionState.
-/// * `clock`: Sui clock.
-public fun trigger_fallback(
+/// Process a single CoW pair intent.
+/// [v2.3] Takes Intent by value (deletes it — replay protection).
+/// Verifies EBBO floor check.
+/// Increments actual_cow_pairs counter in ticket.
+/// Only holder of SettlementTicket can call (only winner has it).
+///
+/// * `ticket`: SettlementTicket (must be mutable to increment counter).
+/// * `intent`: Intent (taken by value, deleted atomically).
+/// * `payout`: Solver's payout coin (from any source: flash, inventory).
+/// * `min_required`: Minimum output required by user (intent.min_amount_out).
+/// * `ebbo_floor`: EBBO floor price (max(min_required, mid_price × sell × 99/100)).
+/// * `ctx`: Transaction context.
+public fun process_intent<T>(
+    ticket: &mut SettlementTicket,
+    intent: cow_dex::intent_book::Intent<T>,
+    payout: Coin<T>,
+    min_required: u64,
+    ebbo_floor: u64,
+    ctx: &mut TxContext,
+) {
+    // Verify intent belongs to this batch
+    let intent_batch_id = cow_dex::intent_book::batch_id(&intent);
+    assert!(std::option::is_some(&intent_batch_id), EWrongBatch);
+    assert!(*std::option::borrow(&intent_batch_id) == ticket.batch_id, EWrongBatch);
+
+    // Check EBBO: actual payout >= max(min_required, ebbo_floor)
+    let actual = coin::value(&payout);
+    assert!(actual >= min_required, EOutputInsufficient);
+    assert!(actual >= ebbo_floor, EClearingPriceMismatch);
+
+    // Consume intent (deletes it — Sui linear type system prevents replay)
+    let (owner, sell_balance, _) = cow_dex::intent_book::consume_intent(intent);
+
+    // Transfer payout to user
+    transfer::public_transfer(payout, owner);
+
+    // Return sell coins to caller (winner solver)
+    let sell_coin = coin::from_balance(sell_balance, ctx);
+    transfer::public_transfer(sell_coin, ctx.sender());
+
+    // Increment actual CoW pair counter
+    ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
+}
+
+/// Close settlement — consume Hot Potato, verify score, return winner bond.
+/// Last command in PTB before flash_repay().
+///
+/// * `state`: AuctionState.
+/// * `ticket`: SettlementTicket (consumed — satisfaction check).
+/// * `ctx`: Transaction context.
+public fun close_settlement(
     state: &mut AuctionState,
-    clock: &Clock,
+    ticket: SettlementTicket,
+    ctx: &mut TxContext,
 ) {
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
+
+    let SettlementTicket {
+        batch_id,
+        committed_score,
+        actual_cow_pairs,
+    } = ticket;
+
+    assert!(batch_id == state.batch_id, EWrongBatch);
+
+    // Verify actual delivery >= committed score
+    assert!(actual_cow_pairs >= committed_score, EScoreMismatch);
+
+    let winner = *std::option::borrow(&state.winner);
+
+    // Return winner's bond
+    let entry = table::remove(&mut state.commits, winner);
+    let CommitEntry { bond, score: _, timestamp: _ } = entry;
+    transfer::public_transfer(
+        coin::from_balance(bond, ctx),
+        winner,
+    );
+
+    state.phase = AuctionPhase::Done;
+
+    sui::event::emit(SettlementCompleteEvent {
+        batch_id: state.batch_id,
+        winner,
+        actual_cow_pairs,
+        committed_score,
+    });
+}
+
+/// Trigger fallback if winner fails to execute within grace period.
+/// Slashes winner bond (transferred to caller as reward for triggering fallback).
+///
+/// * `state`: AuctionState.
+/// * `clock`: Sui clock.
+/// * `ctx`: Transaction context.
+public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut TxContext) {
+    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
-    assert!(current_time_ms > state.grace_end_ms, EInvalidDeadline);
+    assert!(current_time_ms > state.execute_deadline_ms, EInvalidDeadline);
 
-    // Verify winner exists
-    assert!(std::option::is_some(&state.winner), ENotWinner);
+    let winner = *std::option::borrow(&state.winner);
+    let entry = table::remove(&mut state.commits, winner);
+    let CommitEntry { bond, score: _, timestamp: _ } = entry;
+    let slashed_amount = balance::value(&bond);
 
-    // Transition to Failed phase (bond slashed and held in state)
+    // Transfer slashed bond to caller (reward for maintaining protocol)
+    // In production, this should go to a treasury address
+    transfer::public_transfer(
+        coin::from_balance(bond, ctx),
+        ctx.sender(),
+    );
+
     state.phase = AuctionPhase::Failed;
+
+    sui::event::emit(FallbackTriggeredEvent {
+        batch_id: state.batch_id,
+        winner,
+        bond_slashed: slashed_amount,
+    });
+}
+
+/// Losing solvers withdraw their bonds after batch is Done or Failed.
+///
+/// * `state`: AuctionState.
+/// * `ctx`: Transaction context.
+public fun withdraw_losing_bond(state: &mut AuctionState, ctx: &mut TxContext) {
+    assert!(state.phase == AuctionPhase::Done || state.phase == AuctionPhase::Failed, EWrongPhase);
+
+    let sender = ctx.sender();
+    assert!(table::contains(&state.commits, sender), ENotWinner);
+
+    let entry = table::remove(&mut state.commits, sender);
+    let CommitEntry { bond, score: _, timestamp: _ } = entry;
+
+    transfer::public_transfer(
+        coin::from_balance(bond, ctx),
+        sender,
+    );
 }
 
 // === Getters ===
@@ -244,28 +397,37 @@ public fun get_batch_id(state: &AuctionState): u64 {
     state.batch_id
 }
 
-/// Get list of intent IDs.
-public fun get_intent_ids(state: &AuctionState): &vector<ID> {
-    &state.intent_ids
-}
-
-/// Get winning solver address, if exists.
+/// Get winning solver address.
 public fun get_winner(state: &AuctionState): Option<address> {
     state.winner
 }
 
-/// Get actual CoW pairs executed.
-public fun get_actual_cow_pairs(state: &AuctionState): u64 {
-    state.actual_cow_pairs
+/// Get winner's committed score.
+public fun get_winner_score(state: &AuctionState): u64 {
+    state.winner_score
 }
 
-/// Get commit end timestamp (ms).
+/// Get commit phase deadline.
 public fun get_commit_end_ms(state: &AuctionState): u64 {
     state.commit_end_ms
 }
 
-/// Get grace end timestamp (ms).
-public fun get_grace_end_ms(state: &AuctionState): u64 {
-    state.grace_end_ms
+/// Get execution deadline (commit_end + grace).
+public fun get_execute_deadline_ms(state: &AuctionState): u64 {
+    state.execute_deadline_ms
 }
 
+/// Get ticket's batch ID.
+public fun ticket_batch_id(ticket: &SettlementTicket): u64 {
+    ticket.batch_id
+}
+
+/// Get ticket's committed score.
+public fun ticket_committed_score(ticket: &SettlementTicket): u64 {
+    ticket.committed_score
+}
+
+/// Get ticket's actual CoW pairs count.
+public fun ticket_actual_cow_pairs(ticket: &SettlementTicket): u64 {
+    ticket.actual_cow_pairs
+}

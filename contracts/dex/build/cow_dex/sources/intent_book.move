@@ -1,167 +1,213 @@
 module cow_dex::intent_book;
 
-use std::type_name;
-use sui::bcs;
+use std::type_name::{Self, TypeName};
 use sui::clock::Clock;
-use sui::ed25519;
-use sui::table::{Self, Table};
-
-// === Constants ===
-const INITIAL_VERSION: u64 = 0;
+use sui::coin::{Self, Coin};
 
 // === Errors ===
-const EInvalidSignature: u64 = 0;
-const EExpiredDeadline: u64 = 1;
-const EInvalidNonce: u64 = 2;
+const EDeadlineInPast: u64 = 0;
+const ENotIntentOwner: u64 = 1;
 
-// === Enums ===
-public enum IntentStatus has copy, drop, store {
-    Pending,
-    Filled,
-    Cancelled,
+// === Events ===
+
+/// Emitted when user creates a new intent.
+public struct IntentCreatedEvent has copy, drop {
+    intent_id: ID,
+    owner: address,
+    sell_type: TypeName,
+    sell_amount: u64,
+    buy_type: TypeName,
+    min_amount_out: u64,
+    deadline: u64,
+}
+
+/// Emitted when user cancels an intent.
+public struct IntentCancelledEvent has copy, drop {
+    intent_id: ID,
+    owner: address,
+    sell_amount: u64,
 }
 
 // === Structs ===
 
-/// Light Registry — stores only nonces for replay prevention.
-/// Intent data remains OFF-CHAIN in Relay until settlement.
+/// Shared object — user's coins locked inside until settlement or cancellation.
+/// [v2.3] Replaces IntentRegistry + off-chain relay model.
+/// Replay protection: Intent deleted via object::delete(id) in consume_intent()
+/// → Sui linear type system prevents double settlement.
 ///
-/// * `id`: Unique identifier of the registry.
-/// * `user_nonces`: Table<address, u64> mapping user → next expected nonce.
-/// * `version`: Incremented on critical parameter changes.
-public struct IntentRegistry has key, store {
+/// * `id`: Shared object ID.
+/// * `batch_id`: Optional — set when assigned to a batch.
+/// * `owner`: User address (creator).
+/// * `sell_balance`: Locked coins (user's asset during settlement period).
+/// * `sell_amount`: Amount to sell (for CoW matching).
+/// * `buy_type`: Token type expected in return.
+/// * `min_amount_out`: User's minimum acceptable output.
+/// * `deadline`: Unix milliseconds — intent expires after this.
+public struct Intent<phantom T> has key {
     id: UID,
-    user_nonces: Table<address, u64>,
-    version: u64,
+    batch_id: Option<u64>,
+    owner: address,
+    sell_balance: sui::balance::Balance<T>,
+    sell_amount: u64,
+    buy_type: TypeName,
+    min_amount_out: u64,
+    deadline: u64,
+}
+
+/// Owned capability — user holds this to prove ownership and cancel intent.
+/// Consumed when user calls cancel_intent() or when solver consumes the intent.
+///
+/// * `id`: Capability ID.
+/// * `intent_id`: ID of the Intent this cap controls.
+public struct IntentCap has key, store {
+    id: UID,
+    intent_id: ID,
 }
 
 // === Functions ===
 
-/// Initialize a new IntentRegistry. Typically called once during protocol setup.
-/// * `ctx`: Transaction context.
-public fun new(ctx: &mut TxContext): IntentRegistry {
-    IntentRegistry {
-        id: object::new(ctx),
-        user_nonces: table::new(ctx),
-        version: INITIAL_VERSION,
-    }
-}
-
-/// Verify and consume an intent during settlement.
-/// Called by Solver inside the settlement PTB for each intent.
+/// User creates a new intent, locking coins in a shared object.
+/// [v2.3] On-chain intake: coin locked immediately.
+/// Solver discovers via IntentCreatedEvent.
+/// Replay protection: Sui object deletion (Intent deleted in consume_intent).
 ///
-/// Validates:
-/// - Nonce matches next expected (replay prevention)
-/// - Deadline has not passed
-/// - ed25519 signature is valid over the intent message
-///
-/// On success, increments the user's nonce atomically.
-/// If ANY intent verification fails, the entire PTB reverts.
-///
-/// * `registry`: The IntentRegistry.
-/// * `user`: Address of the intent creator.
-/// * `sell_amount`: Amount of sell token.
-/// * `min_amount_out`: Minimum acceptable buy amount.
+/// * `coin`: User's coin to trade.
+/// * `min_amount_out`: Minimum acceptable output.
+/// * `buy_type`: Type name of output token.
 /// * `deadline`: Unix milliseconds deadline.
-/// * `nonce`: User's current nonce.
-/// * `signature`: Ed25519 signature (64 bytes).
-/// * `pubkey`: User's public key for verification (32 bytes for Ed25519).
 /// * `clock`: Sui clock for deadline validation.
-public fun verify_and_consume_intent<SellCoin, BuyCoin>(
-    registry: &mut IntentRegistry,
-    user: address,
-    sell_amount: u64,
+/// * `ctx`: Transaction context.
+public fun create_intent<T>(
+    coin: Coin<T>,
     min_amount_out: u64,
+    buy_type: TypeName,
     deadline: u64,
-    nonce: u64,
-    signature: vector<u8>,
-    pubkey: vector<u8>,
     clock: &Clock,
-) {
-    // 1. Verify nonce is correct (monotonic, replay protection)
-    let current_nonce = if (table::contains(&registry.user_nonces, user)) {
-        *table::borrow(&registry.user_nonces, user)
-    } else {
-        0
-    };
-
-    assert!(nonce == current_nonce, EInvalidNonce);
-
-    // 2. Verify deadline has not passed
+    ctx: &mut TxContext,
+): IntentCap {
     let current_time_ms = clock.timestamp_ms();
-    assert!(current_time_ms <= deadline, EExpiredDeadline);
+    assert!(deadline > current_time_ms, EDeadlineInPast);
 
-    // 3. Verify ed25519 signature over the intent message
-    let intent_hash = encode_intent_hash<SellCoin, BuyCoin>(
-        user,
+    let sell_amount = coin::value(&coin);
+    let owner = ctx.sender();
+    let sell_balance = coin::into_balance(coin);
+
+    let intent = Intent<T> {
+        id: object::new(ctx),
+        batch_id: std::option::none(),
+        owner,
+        sell_balance,
         sell_amount,
+        buy_type,
         min_amount_out,
         deadline,
-        nonce,
-    );
-    assert!(ed25519::ed25519_verify(&signature, &pubkey, &intent_hash), EInvalidSignature);
-
-    // 4. Atomically consume (burn) the nonce
-    // After this, the same (user, nonce) pair can never be verified again
-    if (table::contains(&registry.user_nonces, user)) {
-        *table::borrow_mut(&mut registry.user_nonces, user) = current_nonce + 1;
-    } else {
-        table::add(&mut registry.user_nonces, user, 1);
     };
+
+    let intent_id = object::id(&intent);
+    let cap = IntentCap {
+        id: object::new(ctx),
+        intent_id,
+    };
+
+    // Share the intent object
+    transfer::share_object(intent);
+
+    sui::event::emit(IntentCreatedEvent {
+        intent_id,
+        owner,
+        sell_type: type_name::with_defining_ids<T>(),
+        sell_amount,
+        buy_type,
+        min_amount_out,
+        deadline,
+    });
+
+    cap
+}
+
+/// User cancels their intent, retrieving coins.
+/// [v2.3] Can be called anytime before settlement.
+/// Consumes both cap and intent (both taken by value).
+///
+/// * `cap`: IntentCap (owned, user holds).
+/// * `intent`: Intent object (shared, deleted here).
+/// * `ctx`: Transaction context.
+public fun cancel_intent<T>(
+    cap: IntentCap,
+    intent: Intent<T>,
+    ctx: &mut TxContext,
+) {
+    let IntentCap { id: cap_id, intent_id } = cap;
+    let Intent<T> { id, owner, sell_balance, sell_amount, .. } = intent;
+
+    object::delete(cap_id);
+    object::delete(id);
+
+    assert!(owner == ctx.sender(), ENotIntentOwner);
+
+    // Return coins to user
+    transfer::public_transfer(
+        coin::from_balance(sell_balance, ctx),
+        owner,
+    );
+
+    sui::event::emit(IntentCancelledEvent {
+        intent_id,
+        owner,
+        sell_amount,
+    });
+}
+
+/// Consume intent during settlement (called by settlement.move only).
+/// [v2.3] Called from SettlementTicket pattern via process_intent().
+/// Intent taken by value and deleted — prevents replay.
+/// Sui linear type system guarantees deletion is irreversible.
+///
+/// * `intent`: Intent taken by value (deleted atomically).
+/// Returns: (owner address, sell_balance, min_amount_out)
+public(package) fun consume_intent<T>(
+    intent: Intent<T>,
+): (address, sui::balance::Balance<T>, u64) {
+    let Intent<T> {
+        id,
+        owner,
+        sell_balance,
+        min_amount_out,
+        ..
+    } = intent;
+
+    object::delete(id);  // ← shared object deleted — replay impossible
+    (owner, sell_balance, min_amount_out)
 }
 
 // === Getters ===
 
-/// Get the current user nonce (for next intent submission).
-/// * `registry`: The IntentRegistry.
-/// * `user`: The user address.
-public fun user_nonce(registry: &IntentRegistry, user: address): u64 {
-    if (table::contains(&registry.user_nonces, user)) {
-        *table::borrow(&registry.user_nonces, user)
-    } else {
-        0
-    }
+/// Get intent owner.
+public fun owner<T>(intent: &Intent<T>): address {
+    intent.owner
 }
 
-/// Get current version.
-/// * `registry`: The IntentRegistry.
-public fun version(registry: &IntentRegistry): u64 {
-    registry.version
+/// Get sell amount.
+public fun sell_amount<T>(intent: &Intent<T>): u64 {
+    intent.sell_amount
 }
 
-// === Helper Functions ===
+/// Get minimum output required.
+public fun min_amount_out<T>(intent: &Intent<T>): u64 {
+    intent.min_amount_out
+}
 
-/// Encode intent data into bytes for ed25519 signature verification.
-/// Must match the exact encoding used by the SDK when signing.
-///
-/// Encoding order (BCS):
-/// user (address) | SellCoin type | BuyCoin type |
-/// sell_amount (u64) | min_amount_out (u64) | deadline (u64) | nonce (u64)
-///
-/// * `user`: User address.
-/// * `sell_amount`: Amount to sell.
-/// * `min_amount_out`: Minimum acceptable buy amount.
-/// * `deadline`: Deadline in milliseconds.
-/// * `nonce`: Monotonic nonce.
-fun encode_intent_hash<SellCoin, BuyCoin>(
-    user: address,
-    sell_amount: u64,
-    min_amount_out: u64,
-    deadline: u64,
-    nonce: u64,
-): vector<u8> {
-    let mut buf = bcs::to_bytes(&user);
+/// Get deadline in milliseconds.
+public fun deadline<T>(intent: &Intent<T>): u64 {
+    intent.deadline
+}
 
-    // Include coin types in the hash to bind signature to specific token pair
-    let sell_type = type_name::with_defining_ids<SellCoin>();
-    let buy_type = type_name::with_defining_ids<BuyCoin>();
+/// Get buy token type.
+public fun buy_type<T>(intent: &Intent<T>): TypeName {
+    intent.buy_type
+}
 
-    buf.append(bcs::to_bytes(&sell_type));
-    buf.append(bcs::to_bytes(&buy_type));
-    buf.append(bcs::to_bytes(&sell_amount));
-    buf.append(bcs::to_bytes(&min_amount_out));
-    buf.append(bcs::to_bytes(&deadline));
-    buf.append(bcs::to_bytes(&nonce));
-
-    buf
+/// Get batch ID if assigned.
+public fun batch_id<T>(intent: &Intent<T>): Option<u64> {
+    intent.batch_id
 }
