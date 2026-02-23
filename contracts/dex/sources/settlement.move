@@ -437,3 +437,48 @@ public fun ticket_committed_score(ticket: &SettlementTicket): u64 {
 public fun ticket_actual_cow_pairs(ticket: &SettlementTicket): u64 {
     ticket.actual_cow_pairs
 }
+
+public fun is_commit_phase(state: &AuctionState): bool {
+    state.phase == AuctionPhase::Commit
+}
+
+public fun is_execute_phase(state: &AuctionState): bool {
+    state.phase == AuctionPhase::Execute
+}
+
+public fun is_done_phase(state: &AuctionState): bool {
+    state.phase == AuctionPhase::Done
+}
+
+public fun is_failed_phase(state: &AuctionState): bool {
+    state.phase == AuctionPhase::Failed
+}
+
+// === Test Helpers ===
+
+#[test_only]
+public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {
+    SettlementTicket { batch_id, committed_score, actual_cow_pairs: 0 }
+}
+
+#[test_only]
+public fun destroy_ticket_for_testing(ticket: SettlementTicket) {
+    let SettlementTicket { .. } = ticket;
+}
+
+#[test_only]
+public fun share_state_for_testing(state: AuctionState) {
+    transfer::share_object(state);
+}
+
+#[test_only]
+public fun set_phase_execute_for_testing(state: &mut AuctionState, execute_deadline_ms: u64) {
+    state.phase = AuctionPhase::Execute;
+    state.execute_deadline_ms = execute_deadline_ms;
+}
+
+#[test_only]
+public fun force_winner_for_testing(state: &mut AuctionState, winner: address, score: u64) {
+    state.winner = std::option::some(winner);
+    state.winner_score = score;
+}

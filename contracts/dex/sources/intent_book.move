@@ -1,6 +1,6 @@
 module cow_dex::intent_book;
 
-use sui::balance::Balance;
+use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::event::emit;
@@ -199,4 +199,38 @@ public fun deadline<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 
 /// Get batch ID if assigned.
 public fun batch_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): Option<u64> {
     intent.batch_id
+}
+
+// === Test Helpers ===
+
+#[test_only]
+public fun set_batch_id_for_testing<SellCoin, BuyCoin>(
+    intent: &mut Intent<SellCoin, BuyCoin>,
+    batch_id: u64,
+) {
+    intent.batch_id = std::option::some(batch_id);
+}
+
+#[test_only]
+public fun create_intent_for_testing<SellCoin, BuyCoin>(
+    sell_amount: u64,
+    min_amount_out: u64,
+    deadline: u64,
+    batch_id: u64,
+    ctx: &mut TxContext,
+): Intent<SellCoin, BuyCoin> {
+    Intent<SellCoin, BuyCoin> {
+        id: object::new(ctx),
+        batch_id: std::option::some(batch_id),
+        owner: ctx.sender(),
+        sell_balance: balance::zero<SellCoin>(),
+        sell_amount,
+        min_amount_out,
+        deadline,
+    }
+}
+
+#[test_only]
+public fun intent_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): ID {
+    object::id(intent)
 }

@@ -220,7 +220,7 @@ public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _
     };
 
     let roles = table::borrow_mut(&mut acl.members, address);
-    let idx = 0;
+    let mut idx = 0;
     let len = vector::length(roles);
     let mut found_idx = len;
 
@@ -229,7 +229,7 @@ public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _
             found_idx = idx;
             break
         };
-        idx + 1;
+        idx = idx + 1;
     };
 
     if (found_idx < len) {
@@ -291,4 +291,27 @@ public fun version(config: &GlobalConfig): u64 {
 /// Get ROLE_CONFIG_ADMIN constant.
 public fun role_config_admin(): u64 {
     ROLE_CONFIG_ADMIN
+}
+
+// === Test Helpers ===
+
+#[test_only]
+public fun default_min_bond(): u64 { DEFAULT_MIN_BOND }
+
+#[test_only]
+public fun default_commit_duration_ms(): u64 { DEFAULT_COMMIT_DURATION_MS }
+
+#[test_only]
+public fun default_grace_period_ms(): u64 { DEFAULT_GRACE_PERIOD_MS }
+
+#[test_only]
+public fun default_protocol_fee_bps(): u64 { DEFAULT_PROTOCOL_FEE_BPS }
+
+#[test_only]
+public fun max_protocol_fee_bps(): u64 { MAX_PROTOCOL_FEE_BPS }
+
+#[test_only]
+public fun destroy_for_testing(config: GlobalConfig, cap: AdminCap) {
+    std::unit_test::destroy(config);
+    std::unit_test::destroy(cap);
 }
