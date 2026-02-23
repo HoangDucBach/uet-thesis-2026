@@ -1,13 +1,14 @@
 {
-	"name": "uet-thesis-2026",
-	"version": "2.3.0",
-	"description": "CoW DEX on Sui: Score-Commit Auction with Shared Intent Objects",
-	"private": true,
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/HoangDucBach/thesis-uet-2026.git"
-	},
-	"dependencies": {
-		"semantic-release": "^25.0.3"
-	}
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "uet-thesis-2026",
+  "version": "2.3.0",
+  "description": "CoW DEX on Sui",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HoangDucBach/uet-thesis-2026.git"
+  },
+  "dependencies": {
+    "semantic-release": "^25.0.3"
+  }
 }
