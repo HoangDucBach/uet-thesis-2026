@@ -7,9 +7,15 @@ use sui::table::{Self, Table};
 const INITIAL_VERSION: u64 = 1;
 const MAX_PROTOCOL_FEE_BPS: u64 = 10_000; // 100% in basis points
 
+// === Default Configuration Parameters ===
+
+const DEFAULT_MIN_BOND: u64 = 1_000_000_000; // 1 SUI
+const DEFAULT_COMMIT_DURATION_MS: u64 = 2000; // 2 seconds
+const DEFAULT_GRACE_PERIOD_MS: u64 = 5000; // 5 seconds
+const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
+
 // === ACL Roles ===
 
-/// Role: Can modify core protocol parameters (bonds, durations, fees)
 const ROLE_CONFIG_ADMIN: u64 = 0;
 
 // === Errors ===
@@ -22,7 +28,6 @@ const EInvalidDuration: u64 = 3;
 // === Structs ===
 
 /// Administrative capability for configuration management.
-/// Only holder can modify protocol parameters.
 public struct AdminCap has key, store {
     id: UID,
 }
@@ -35,10 +40,10 @@ public struct ACL has store {
 
 /// Global protocol configuration.
 /// * `id`: Unique identifier.
-/// * `min_bond`: Minimum SUI bond required from solvers (in basis).
-/// * `commit_duration_ms`: Duration of commit phase (milliseconds).
-/// * `grace_period_ms`: Grace period for winner execution (milliseconds).
-/// * `protocol_fee_bps`: Protocol fee in basis points (0-10000).
+/// * `min_bond`: Minimum SUI bond required from solvers.
+/// * `commit_duration_ms`: Duration of commit phase.
+/// * `grace_period_ms`: Grace period for winner execution.
+/// * `protocol_fee_bps`: Protocol fee in basis points.
 /// * `acl`: Access control list.
 /// * `version`: Protocol version for upgrade tracking.
 public struct GlobalConfig has key, store {
@@ -101,10 +106,10 @@ public fun init_config(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
 
     let config = GlobalConfig {
         id: object::new(ctx),
-        min_bond: 1_000_000_000,        // 1 SUI
-        commit_duration_ms: 2000,       // 2 seconds
-        grace_period_ms: 5000,          // 5 seconds
-        protocol_fee_bps: 100,          // 1% (100 bps)
+        min_bond: DEFAULT_MIN_BOND,
+        commit_duration_ms: DEFAULT_COMMIT_DURATION_MS,
+        grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
+        protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
         acl: ACL { members: table::new(ctx) },
         version: INITIAL_VERSION,
     };
@@ -112,17 +117,11 @@ public fun init_config(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
     (config, admin_cap)
 }
 
-// === Configuration Setters ===
-
 /// Update minimum bond amount.
 /// * `config`: The GlobalConfig.
 /// * `new_min_bond`: New minimum bond in base units.
 /// * `_cap`: AdminCap for authorization.
-public fun set_min_bond(
-    config: &mut GlobalConfig,
-    new_min_bond: u64,
-    _cap: &AdminCap,
-) {
+public fun set_min_bond(config: &mut GlobalConfig, new_min_bond: u64, _cap: &AdminCap) {
     assert!(new_min_bond > 0, EInvalidBondAmount);
 
     let old_value = config.min_bond;
@@ -158,11 +157,7 @@ public fun set_commit_duration(
 /// * `config`: The GlobalConfig.
 /// * `new_grace_period_ms`: New grace period in milliseconds.
 /// * `_cap`: AdminCap for authorization.
-public fun set_grace_period(
-    config: &mut GlobalConfig,
-    new_grace_period_ms: u64,
-    _cap: &AdminCap,
-) {
+public fun set_grace_period(config: &mut GlobalConfig, new_grace_period_ms: u64, _cap: &AdminCap) {
     assert!(new_grace_period_ms > 0, EInvalidDuration);
 
     let old_value = config.grace_period_ms;
@@ -178,11 +173,7 @@ public fun set_grace_period(
 /// * `config`: The GlobalConfig.
 /// * `new_protocol_fee_bps`: New fee in basis points (0-10000).
 /// * `_cap`: AdminCap for authorization.
-public fun set_protocol_fee(
-    config: &mut GlobalConfig,
-    new_protocol_fee_bps: u64,
-    _cap: &AdminCap,
-) {
+public fun set_protocol_fee(config: &mut GlobalConfig, new_protocol_fee_bps: u64, _cap: &AdminCap) {
     assert!(new_protocol_fee_bps <= MAX_PROTOCOL_FEE_BPS, EInvalidFeeRate);
 
     let old_value = config.protocol_fee_bps;
@@ -194,19 +185,12 @@ public fun set_protocol_fee(
     });
 }
 
-// === ACL Management ===
-
 /// Grant a role to an address.
 /// * `config`: The GlobalConfig.
 /// * `address`: Address to grant role to.
 /// * `role`: Role ID to grant (must be ROLE_CONFIG_ADMIN).
 /// * `_cap`: AdminCap for authorization.
-public fun grant_role(
-    config: &mut GlobalConfig,
-    address: address,
-    role: u64,
-    _cap: &AdminCap,
-) {
+public fun grant_role(config: &mut GlobalConfig, address: address, role: u64, _cap: &AdminCap) {
     assert!(role == ROLE_CONFIG_ADMIN, EUnauthorized);
 
     let acl = &mut config.acl;
@@ -227,12 +211,7 @@ public fun grant_role(
 /// * `address`: Address to revoke role from.
 /// * `role`: Role ID to revoke (must be ROLE_CONFIG_ADMIN).
 /// * `_cap`: AdminCap for authorization.
-public fun revoke_role(
-    config: &mut GlobalConfig,
-    address: address,
-    role: u64,
-    _cap: &AdminCap,
-) {
+public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _cap: &AdminCap) {
     assert!(role == ROLE_CONFIG_ADMIN, EUnauthorized);
 
     let acl = &mut config.acl;
@@ -285,27 +264,27 @@ public fun assert_config_admin(config: &GlobalConfig, address: address) {
 // === Getters ===
 
 /// Get minimum bond amount.
-public fun get_min_bond(config: &GlobalConfig): u64 {
+public fun min_bond(config: &GlobalConfig): u64 {
     config.min_bond
 }
 
 /// Get commit phase duration.
-public fun get_commit_duration_ms(config: &GlobalConfig): u64 {
+public fun commit_duration_ms(config: &GlobalConfig): u64 {
     config.commit_duration_ms
 }
 
 /// Get grace period for execution.
-public fun get_grace_period_ms(config: &GlobalConfig): u64 {
+public fun grace_period_ms(config: &GlobalConfig): u64 {
     config.grace_period_ms
 }
 
 /// Get protocol fee in basis points.
-public fun get_protocol_fee_bps(config: &GlobalConfig): u64 {
+public fun protocol_fee_bps(config: &GlobalConfig): u64 {
     config.protocol_fee_bps
 }
 
 /// Get current version.
-public fun get_version(config: &GlobalConfig): u64 {
+public fun version(config: &GlobalConfig): u64 {
     config.version
 }
 
