@@ -1,6 +1,6 @@
 module cow_dex::intent_book;
 
-use sui::balance::Balance;
+use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::event::emit;

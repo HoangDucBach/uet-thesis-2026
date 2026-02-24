@@ -136,9 +136,9 @@ public fun open_batch(
         commit_end_ms,
         execute_deadline_ms: commit_end_ms + config.grace_period_ms(),
         commits: table::new(ctx),
-        winner: std::option::none(),
+        winner: option::none(),
         winner_score: 0,
-        runner_up: std::option::none(),
+        runner_up: option::none(),
         runner_up_score: 0,
     }
 }
@@ -177,29 +177,29 @@ public fun commit(
     table::add(&mut state.commits, sender, entry);
 
     // Update winner on-the-fly (highest score, earliest timestamp for ties)
-    if (std::option::is_none(&state.winner)) {
-        state.winner = std::option::some(sender);
+    if (option::is_none(&state.winner)) {
+        state.winner = option::some(sender);
         state.winner_score = score;
     } else {
-        let current_winner = *std::option::borrow(&state.winner);
+        let current_winner = *option::borrow(&state.winner);
         let entry_ref = table::borrow(&state.commits, current_winner);
         let current_winner_timestamp = entry_ref.timestamp;
 
         if (score > state.winner_score) {
             // New winner is better
-            state.runner_up = std::option::some(current_winner);
+            state.runner_up = option::some(current_winner);
             state.runner_up_score = state.winner_score;
-            state.winner = std::option::some(sender);
+            state.winner = option::some(sender);
             state.winner_score = score;
         } else if (score > state.runner_up_score) {
             // Not better than winner, but better than runner-up
-            state.runner_up = std::option::some(sender);
+            state.runner_up = option::some(sender);
             state.runner_up_score = score;
         } else if (score == state.winner_score && current_time_ms < current_winner_timestamp) {
             // Tie with winner, but earlier timestamp
-            state.runner_up = std::option::some(current_winner);
+            state.runner_up = option::some(current_winner);
             state.runner_up_score = state.winner_score;
-            state.winner = std::option::some(sender);
+            state.winner = option::some(sender);
         };
     };
 }
@@ -239,9 +239,9 @@ public fun open_settlement(
     let current_time_ms = clock.timestamp_ms();
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
     assert!(current_time_ms <= state.execute_deadline_ms, EInvalidDeadline);
-    assert!(std::option::is_some(&state.winner), ENotWinner);
+    assert!(option::is_some(&state.winner), ENotWinner);
 
-    let winner = *std::option::borrow(&state.winner);
+    let winner = *option::borrow(&state.winner);
     assert!(winner == ctx.sender(), ENotWinner);
 
     SettlementTicket {
@@ -343,7 +343,7 @@ public fun close_settlement(
     // Verify actual delivery >= committed score
     assert!(actual_cow_pairs >= committed_score, EScoreMismatch);
 
-    let winner = *std::option::borrow(&state.winner);
+    let winner = *option::borrow(&state.winner);
 
     // Return winner's bond
     let entry = table::remove(&mut state.commits, winner);
@@ -375,7 +375,7 @@ public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut T
     let current_time_ms = clock.timestamp_ms();
     assert!(current_time_ms > state.execute_deadline_ms, EInvalidDeadline);
 
-    let winner = *std::option::borrow(&state.winner);
+    let winner = *option::borrow(&state.winner);
     let entry = table::remove(&mut state.commits, winner);
     let CommitEntry { bond, score: _, timestamp: _ } = entry;
     let slashed_amount = balance::value(&bond);
@@ -511,6 +511,6 @@ public fun set_phase_execute_for_testing(state: &mut AuctionState, execute_deadl
 
 #[test_only]
 public fun force_winner_for_testing(state: &mut AuctionState, winner: address, score: u64) {
-    state.winner = std::option::some(winner);
+    state.winner = option::some(winner);
     state.winner_score = score;
 }
