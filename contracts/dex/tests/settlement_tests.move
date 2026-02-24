@@ -22,6 +22,7 @@ const ESCORE_MISMATCH: u64 = 4;
 const EINVALID_DEADLINE: u64 = 5;
 const EWRONG_BATCH: u64 = 6;
 const ENO_COMMITS: u64 = 7;
+const EDUPLICATE_COMMIT: u64 = 8;
 
 // ─── Tests: open_batch ─────────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ fun test_commit_after_deadline_aborts() {
 }
 
 #[test]
-#[expected_failure(abort_code = EWRONG_PHASE, location = cow_dex::settlement)]
+#[expected_failure(abort_code = EDUPLICATE_COMMIT, location = cow_dex::settlement)]
 fun test_commit_duplicate_same_sender_aborts() {
     let mut ctx = tx_context::dummy();
     let (config, cap) = config::create_for_testing(&mut ctx);

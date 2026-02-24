@@ -23,6 +23,7 @@ const EScoreMismatch: u64 = 4;
 const EInvalidDeadline: u64 = 5;
 const EWrongBatch: u64 = 6;
 const ENoCommits: u64 = 7;
+const EDuplicateCommit: u64 = 8;
 
 // === Enums ===
 
@@ -83,6 +84,15 @@ public struct AuctionState has key {
 }
 
 // === Events ===
+
+/// Emitted when a new batch is opened.
+public struct BatchOpenedEvent has copy, drop {
+    batch_id: u64,
+    auction_state_id: ID,
+    intent_ids: vector<ID>,
+    commit_end_ms: u64,
+    execute_deadline_ms: u64,
+}
 
 /// Emitted when winner is selected after commit phase closes.
 public struct WinnerSelectedEvent has copy, drop {
@@ -147,20 +157,31 @@ public fun open_batch(
 ): AuctionState {
     let current_time_ms = clock.timestamp_ms();
     let commit_end_ms = current_time_ms + config.commit_duration_ms();
+    let execute_deadline_ms = commit_end_ms + config.grace_period_ms();
 
-    AuctionState {
+    let state = AuctionState {
         id: object::new(ctx),
         batch_id,
         intent_ids,
         phase: AuctionPhase::Commit,
         commit_end_ms,
-        execute_deadline_ms: commit_end_ms + config.grace_period_ms(),
+        execute_deadline_ms,
         commits: table::new(ctx),
         winner: option::none(),
         winner_score: 0,
         runner_up: option::none(),
         runner_up_score: 0,
-    }
+    };
+
+    emit(BatchOpenedEvent {
+        batch_id,
+        auction_state_id: object::id(&state),
+        intent_ids,
+        commit_end_ms,
+        execute_deadline_ms,
+    });
+
+    state
 }
 
 /// Submit a score commitment during commit phase.
@@ -187,7 +208,7 @@ public fun commit(
     assert!(coin::value(&bond) >= config.min_bond(), EBondTooSmall);
 
     let sender = ctx.sender();
-    assert!(!table::contains(&state.commits, sender), EWrongPhase);
+    assert!(!table::contains(&state.commits, sender), EDuplicateCommit);
 
     let entry = CommitEntry {
         score,

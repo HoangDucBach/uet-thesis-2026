@@ -1,5 +1,6 @@
 module cow_dex::intent_book;
 
+use std::type_name::{Self, TypeName};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
@@ -8,6 +9,7 @@ use sui::event::emit;
 // === Errors ===
 const EDeadlineInPast: u64 = 0;
 const ENotIntentOwner: u64 = 1;
+const EIntentInBatch: u64 = 2;
 
 // === Events ===
 
@@ -15,6 +17,8 @@ const ENotIntentOwner: u64 = 1;
 public struct IntentCreatedEvent has copy, drop {
     intent_id: ID,
     owner: address,
+    sell_type: TypeName,
+    buy_type: TypeName,
     sell_amount: u64,
     min_amount_out: u64,
     deadline: u64,
@@ -106,6 +110,8 @@ public fun create_intent<SellCoin, BuyCoin>(
     emit(IntentCreatedEvent {
         intent_id,
         owner,
+        sell_type: type_name::with_defining_ids<SellCoin>(),
+        buy_type: type_name::with_defining_ids<BuyCoin>(),
         sell_amount,
         min_amount_out,
         deadline,
@@ -129,7 +135,10 @@ public fun cancel_intent<SellCoin, BuyCoin>(
     ctx: &mut TxContext,
 ) {
     let IntentCap { id: cap_id, intent_id } = cap;
-    let Intent<SellCoin, BuyCoin> { id, owner, sell_balance, sell_amount, .. } = intent;
+    let Intent<SellCoin, BuyCoin> { id, batch_id, owner, sell_balance, sell_amount, .. } = intent;
+
+    // Cannot cancel if intent is already in a batch
+    assert!(option::is_none(&batch_id), EIntentInBatch);
 
     object::delete(cap_id);
     object::delete(id);
