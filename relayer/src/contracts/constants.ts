@@ -33,10 +33,10 @@ export const DEEPBOOK = {
 
   // Events
   EVENTS: {
-    POOL_CREATED: 'PoolCreated',
-    SWAP: 'Swap',
-    ADD_LIQUIDITY: 'AddLiquidity',
-    REMOVE_LIQUIDITY: 'RemoveLiquidity',
+    POOL_CREATED: 'PoolCreatedEvent',
+    SWAP: 'SwapEvent',
+    ADD_LIQUIDITY: 'AddLiquidityEvent',
+    REMOVE_LIQUIDITY: 'RemoveLiquidityEvent',
   },
 
   // Public Functions
@@ -71,9 +71,9 @@ export const COW_DEX = {
 
   // Events
   EVENTS: {
-    BATCH_CREATED: 'BatchCreated',
-    BATCH_SETTLED: 'BatchSettled',
-    SOLVER_COMMITTED: 'SolverCommitted',
+    BATCH_CREATED: 'BatchCreatedEvent',
+    BATCH_SETTLED: 'BatchSettledEvent',
+    SOLVER_COMMITTED: 'SolverCommittedEvent',
   },
 
   // Public Functions
@@ -107,8 +107,8 @@ export const INTENT_BOOK = {
 
   // Events
   EVENTS: {
-    INTENT_CREATED: 'IntentCreated',
-    INTENT_CANCELLED: 'IntentCancelled',
+    INTENT_CREATED: 'IntentCreatedEvent',
+    INTENT_CANCELLED: 'IntentCancelledEvent',
   },
 
   // Public Functions
@@ -142,10 +142,10 @@ export const SETTLEMENT = {
 
   // Events
   EVENTS: {
-    AUCTION_CREATED: 'AuctionCreated',
-    WINNER_SELECTED: 'WinnerSelected',
-    SETTLEMENT_COMPLETE: 'SettlementComplete',
-    FALLBACK_TRIGGERED: 'FallbackTriggered',
+    AUCTION_CREATED: 'AuctionCreatedEvent',
+    WINNER_SELECTED: 'WinnerSelectedEvent',
+    SETTLEMENT_COMPLETE: 'SettlementCompleteEvent',
+    FALLBACK_TRIGGERED: 'FallbackTriggeredEvent',
   },
 
   // Public Functions
@@ -180,9 +180,9 @@ export const CONFIG = {
 
   // Events
   EVENTS: {
-    CONFIG_UPDATED: 'ConfigUpdated',
-    MIN_BOND_UPDATED: 'MinBondUpdated',
-    PROTOCOL_FEE_UPDATED: 'ProtocolFeeUpdated',
+    CONFIG_UPDATED: 'ConfigUpdatedEvent',
+    MIN_BOND_UPDATED: 'MinBondUpdatedEvent',
+    PROTOCOL_FEE_UPDATED: 'ProtocolFeeUpdatedEvent',
   },
 
   // Public Functions

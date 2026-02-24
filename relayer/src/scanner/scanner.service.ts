@@ -7,7 +7,8 @@ import {
 import { EventEmitter } from 'events';
 import { ChainService } from 'src/chain/chain.service';
 import { CacheService } from './cache.service';
-import { IntentEvent, Cursor, PollResult } from './scanner.types';
+import { IntentEvent, PollResult } from './scanner.types';
+import { INTENT_BOOK } from 'src/contracts';
 
 @Injectable()
 export class ScannerService
@@ -15,7 +16,7 @@ export class ScannerService
   implements OnModuleInit, OnApplicationShutdown
 {
   private logger = new Logger(ScannerService.name);
-  private cursor: Cursor | null = null;
+  private cursor: string | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private eventBuffer: IntentEvent[] = [];
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,10 +80,10 @@ export class ScannerService
 
   private async fetchNewIntents(): Promise<PollResult> {
     return await this.chainService.queryEventsPaginated({
-      module: 'intent_book',
-      eventType: 'IntentCreated',
+      module: INTENT_BOOK.MODULE_NAME,
+      eventType: INTENT_BOOK.EVENTS.INTENT_CREATED,
       limit: this.EVENTS_LIMIT,
-      cursor: this.cursor?.txDigest,
+      cursor: typeof this.cursor === 'string' ? this.cursor : undefined,
     });
   }
 
@@ -98,23 +99,24 @@ export class ScannerService
       }
     }
 
-    if (result.nextCursor) {
+    if (result.nextCursor && typeof result.nextCursor === 'string') {
       this.cursor = result.nextCursor;
       await this.saveCursor();
     }
   }
 
-  private parseIntentEvent(event: IntentEvent): IntentEvent | null {
+  private parseIntentEvent(event: any): IntentEvent | null {
     try {
       return {
         id: event.id,
         owner: event.owner,
-        sellAmount: BigInt(event.sellAmount),
-        minAmountOut: BigInt(event.minAmountOut),
-        deadline: BigInt(event.deadline),
+        sellAmount: BigInt(event.sell_amount || event.sellAmount || 0),
+        minAmountOut: BigInt(event.min_amount_out || event.minAmountOut || 0),
+        deadline: BigInt(event.deadline || 0),
         txDigest: event.txDigest,
         eventSeq: event.eventSeq,
         timestamp: Date.now(),
+        eventBcs: event.eventBcs,
       };
     } catch (err) {
       this.logger.warn(`Failed to parse intent event: ${err}`);
@@ -160,9 +162,8 @@ export class ScannerService
     try {
       const saved = await this.cacheService.get(this.CURSOR_KEY);
       if (saved) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        this.cursor = JSON.parse(saved);
-        this.logger.log(`Loaded cursor: ${JSON.stringify(this.cursor)}`);
+        this.cursor = saved;
+        this.logger.log(`Loaded cursor: ${this.cursor}`);
       }
     } catch (err) {
       this.logger.warn(`Failed to load cursor: ${err}`);
@@ -174,7 +175,7 @@ export class ScannerService
       if (this.cursor) {
         await this.cacheService.set(
           this.CURSOR_KEY,
-          JSON.stringify(this.cursor),
+          this.cursor,
           this.CURSOR_TTL_SECONDS,
         );
       }

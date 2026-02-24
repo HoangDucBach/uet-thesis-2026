@@ -7,14 +7,10 @@ export interface IntentEvent {
   txDigest: string;
   eventSeq: number;
   timestamp: number;
-}
-
-export interface Cursor {
-  txDigest: string;
-  eventSeq: number;
+  eventBcs?: string;
 }
 
 export interface PollResult {
   data: IntentEvent[];
-  nextCursor?: Cursor;
+  nextCursor?: string;
 }
