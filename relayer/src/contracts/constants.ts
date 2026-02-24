@@ -138,11 +138,12 @@ export const SETTLEMENT = {
   TYPES: {
     AUCTION_STATE: 'AuctionState',
     SETTLEMENT_TICKET: 'SettlementTicket',
+    COMMIT_ENTRY: 'CommitEntry',
+    AUCTION_PHASE: 'AuctionPhase',
   },
 
   // Events
   EVENTS: {
-    AUCTION_CREATED: 'AuctionCreatedEvent',
     WINNER_SELECTED: 'WinnerSelectedEvent',
     SETTLEMENT_COMPLETE: 'SettlementCompleteEvent',
     FALLBACK_TRIGGERED: 'FallbackTriggeredEvent',
@@ -150,10 +151,15 @@ export const SETTLEMENT = {
 
   // Public Functions
   FUNCTIONS: {
-    CREATE_AUCTION: 'create_auction',
-    COMMIT_SOLUTION: 'commit_solution',
-    SELECT_WINNER: 'select_winner',
-    SETTLE_AUCTION: 'settle_auction',
+    OPEN_BATCH: 'open_batch',
+    OPEN_BATCH_AND_SHARE: 'open_batch_and_share',
+    COMMIT: 'commit',
+    CLOSE_COMMITS: 'close_commits',
+    OPEN_SETTLEMENT: 'open_settlement',
+    PROCESS_INTENT: 'process_intent',
+    CLOSE_SETTLEMENT: 'close_settlement',
+    TRIGGER_FALLBACK: 'trigger_fallback',
+    CLAIM_REFUND: 'claim_refund',
   },
 } as const;
 

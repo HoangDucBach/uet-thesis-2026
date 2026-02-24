@@ -6,6 +6,7 @@ import { RelayConfigService } from 'src/config/relay-config.service';
 import { IntentEvent } from 'src/scanner/scanner.types';
 import { BatchInput, BatchOpenResult, BatchStatus } from './keeper.types';
 import { Transaction } from '@mysten/sui/transactions';
+import { SETTLEMENT } from 'src/contracts';
 
 @Injectable()
 export class KeeperService implements OnModuleInit {
@@ -93,7 +94,9 @@ export class KeeperService implements OnModuleInit {
     const cowDexPackageId = this.contractConfig.getCowDexPackageId();
 
     tx.moveCall({
-      target: `${cowDexPackageId}::settlement::open_batch`,
+      package: cowDexPackageId,
+      module: SETTLEMENT.MODULE_NAME,
+      function: SETTLEMENT.FUNCTIONS.OPEN_BATCH_AND_SHARE,
       arguments: [
         tx.object(this.globalConfigId),
         tx.pure.u64(batchNumber),
