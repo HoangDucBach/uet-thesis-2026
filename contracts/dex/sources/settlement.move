@@ -110,6 +110,26 @@ public struct FallbackTriggeredEvent has copy, drop {
 
 // === Functions ===
 
+/// Open a new batch auction and share immediately.
+/// Entry function for PTB/off-chain relay — shares object in one transaction.
+/// Permissionless — relay or anyone can call.
+///
+/// * `config`: GlobalConfig for protocol parameters.
+/// * `batch_id`: Batch sequence number.
+/// * `intent_ids`: Vector of Intent IDs in this batch.
+/// * `clock`: Sui clock.
+/// * `ctx`: Transaction context.
+entry fun open_batch_and_share(
+    config: &GlobalConfig,
+    batch_id: u64,
+    intent_ids: vector<ID>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let state = open_batch(config, batch_id, intent_ids, clock, ctx);
+    transfer::share_object(state);
+}
+
 /// Open a new batch auction.
 /// Permissionless — relay or anyone can call.
 ///
