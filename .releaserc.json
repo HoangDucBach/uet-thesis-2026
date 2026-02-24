@@ -2,13 +2,6 @@
   "branches": ["main"],
   "plugins": [
     "@semantic-release/commit-analyzer",
-    "@semantic-release/release-notes-generator",
-    [
-      "@semantic-release/github",
-      {
-        "successComment": "Release published as v<%= nextRelease.version %>",
-        "failTitle": "Release failed"
-      }
-    ]
+    "@semantic-release/release-notes-generator"
   ]
 }
