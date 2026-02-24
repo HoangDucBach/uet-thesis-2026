@@ -13,3 +13,9 @@ pnpm-lock.yaml
 
 # OS generated files
 .DS_Store
+
+# Move/Sui build artifacts
+build/
+**/build/
+**/*.mv
+**/*.mvd
