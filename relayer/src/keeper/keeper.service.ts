@@ -97,7 +97,7 @@ export class KeeperService implements OnModuleInit {
       arguments: [
         tx.object(this.globalConfigId),
         tx.pure.u64(batchNumber),
-        tx.pure.vector('address', intentIds),
+        tx.pure.vector('id', intentIds),
         tx.object('0x6'),
       ],
     });
@@ -136,7 +136,9 @@ export class KeeperService implements OnModuleInit {
     return `batch_${Date.now()}_${++this.batchCounter}`;
   }
 
-  private extractIntentIdFromEventBcs(eventBcs: string | undefined): string | null {
+  private extractIntentIdFromEventBcs(
+    eventBcs: string | undefined,
+  ): string | null {
     if (!eventBcs) {
       return null;
     }
@@ -168,7 +170,10 @@ export class KeeperService implements OnModuleInit {
         return null;
       }
 
-      const intentIdBytes = bytes.subarray(EVENT_DATA_OFFSET, EVENT_DATA_OFFSET + 32);
+      const intentIdBytes = bytes.subarray(
+        EVENT_DATA_OFFSET,
+        EVENT_DATA_OFFSET + 32,
+      );
       const intentIdHex = '0x' + intentIdBytes.toString('hex');
 
       // Verify it's not all zeros or all ones (invalid address)
@@ -176,7 +181,9 @@ export class KeeperService implements OnModuleInit {
         intentIdHex === '0x' + '0'.repeat(64) ||
         intentIdHex === '0x' + 'f'.repeat(64)
       ) {
-        this.logger.warn(`Invalid intent ID (all zeros or ones): ${intentIdHex}`);
+        this.logger.warn(
+          `Invalid intent ID (all zeros or ones): ${intentIdHex}`,
+        );
         return null;
       }
 
