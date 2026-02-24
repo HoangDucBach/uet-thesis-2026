@@ -1,5 +1,6 @@
 module cow_dex::config;
 
+use sui::event::emit;
 use sui::table::{Self, Table};
 
 // === Constants ===
@@ -103,9 +104,9 @@ public struct RoleRevokedEvent has copy, drop {
 // === Initialization ===
 
 /// Initialize the global configuration and admin capability.
-/// Called once during protocol setup.
+/// Called automatically when the package is published.
 /// * `ctx`: Transaction context.
-public fun init_config(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
+fun init(ctx: &mut TxContext) {
     let admin_cap = AdminCap {
         id: object::new(ctx),
     };
@@ -120,7 +121,8 @@ public fun init_config(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
         version: INITIAL_VERSION,
     };
 
-    (config, admin_cap)
+    transfer::share_object(config);
+    transfer::transfer(admin_cap, ctx.sender());
 }
 
 /// Update minimum bond amount.
@@ -134,7 +136,7 @@ public fun set_min_bond(config: &mut GlobalConfig, new_min_bond: u64, _cap: &Adm
     let old_value = config.min_bond;
     config.min_bond = new_min_bond;
 
-    sui::event::emit(UpdateMinBondEvent {
+    emit(UpdateMinBondEvent {
         old_value,
         new_value: new_min_bond,
     });
@@ -155,7 +157,7 @@ public fun set_commit_duration(
     let old_value = config.commit_duration_ms;
     config.commit_duration_ms = new_commit_duration_ms;
 
-    sui::event::emit(UpdateCommitDurationEvent {
+    emit(UpdateCommitDurationEvent {
         old_value,
         new_value: new_commit_duration_ms,
     });
@@ -172,7 +174,7 @@ public fun set_grace_period(config: &mut GlobalConfig, new_grace_period_ms: u64,
     let old_value = config.grace_period_ms;
     config.grace_period_ms = new_grace_period_ms;
 
-    sui::event::emit(UpdateGracePeriodEvent {
+    emit(UpdateGracePeriodEvent {
         old_value,
         new_value: new_grace_period_ms,
     });
@@ -188,7 +190,7 @@ public fun set_protocol_fee(config: &mut GlobalConfig, new_protocol_fee_bps: u64
     let old_value = config.protocol_fee_bps;
     config.protocol_fee_bps = new_protocol_fee_bps;
 
-    sui::event::emit(UpdateProtocolFeeEvent {
+    emit(UpdateProtocolFeeEvent {
         old_value,
         new_value: new_protocol_fee_bps,
     });
@@ -212,7 +214,7 @@ public fun grant_role(config: &mut GlobalConfig, address: address, role: u64, _c
         vector::push_back(roles, role);
     };
 
-    sui::event::emit(RoleGrantedEvent { address, role });
+    emit(RoleGrantedEvent { address, role });
 }
 
 /// Revoke a role from an address.
@@ -245,7 +247,7 @@ public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _
         vector::remove(roles, found_idx);
     };
 
-    sui::event::emit(RoleRevokedEvent { address, role });
+    emit(RoleRevokedEvent { address, role });
 }
 
 // === Permission Checks ===
@@ -318,6 +320,25 @@ public fun default_protocol_fee_bps(): u64 { DEFAULT_PROTOCOL_FEE_BPS }
 
 #[test_only]
 public fun max_protocol_fee_bps(): u64 { MAX_PROTOCOL_FEE_BPS }
+
+#[test_only]
+public fun create_for_testing(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
+    let admin_cap = AdminCap {
+        id: object::new(ctx),
+    };
+
+    let config = GlobalConfig {
+        id: object::new(ctx),
+        min_bond: DEFAULT_MIN_BOND,
+        commit_duration_ms: DEFAULT_COMMIT_DURATION_MS,
+        grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
+        protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
+        acl: ACL { members: table::new(ctx) },
+        version: INITIAL_VERSION,
+    };
+
+    (config, admin_cap)
+}
 
 #[test_only]
 public fun destroy_for_testing(config: GlobalConfig, cap: AdminCap) {
