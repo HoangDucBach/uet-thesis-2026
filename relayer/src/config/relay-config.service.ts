@@ -56,4 +56,14 @@ export class RelayConfigService {
     }
     return registryId;
   }
+
+  getGlobalConfigId(): string {
+    const configId = this.configService.get<string>('GLOBAL_CONFIG_ID');
+    if (!configId) {
+      throw new Error(
+        'GLOBAL_CONFIG_ID is required but not set in environment variables',
+      );
+    }
+    return configId;
+  }
 }

@@ -8,7 +8,13 @@ import { ScannerModule } from './scanner/scanner.module';
 import { ChainModule } from './chain/chain.module';
 
 @Module({
-  imports: [ConfigModule, ContractModule, KeeperModule, ScannerModule, ChainModule],
+  imports: [
+    ConfigModule,
+    ContractModule,
+    KeeperModule,
+    ScannerModule,
+    ChainModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

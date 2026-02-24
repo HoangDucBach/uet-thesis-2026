@@ -1,0 +1,67 @@
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: relayer-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: relayer-postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: ${DB_NAME:-relayer}
+      POSTGRES_USER: ${DB_USER:-relayer}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-relayer}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-relayer}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  relayer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relayer-app
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      NETWORK: ${NETWORK:-testnet}
+      ADMIN_PRIVATE_KEY: ${ADMIN_PRIVATE_KEY}
+      COW_DEX_PACKAGE_ID: ${COW_DEX_PACKAGE_ID}
+      DEEPBOOK_PACKAGE_ID: ${DEEPBOOK_PACKAGE_ID}
+      DEEPBOOK_REGISTRY_ID: ${DEEPBOOK_REGISTRY_ID}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-relayer}
+      DB_USER: ${DB_USER:-relayer}
+      DB_PASSWORD: ${DB_PASSWORD:-relayer}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:
