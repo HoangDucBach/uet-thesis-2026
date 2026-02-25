@@ -1,4 +1,3 @@
-import { CacheModule } from 'src/cache/cache.module';
 import { ChainModule } from 'src/chain/chain.module';
 import { ConfigModule } from 'src/config/config.module';
 import { ContractModule } from 'src/contracts/contract.module';
@@ -7,23 +6,21 @@ import { ScannerModule } from 'src/scanner/scanner.module';
 import { Module } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
+import { CloseCommitsProcessor } from './close-commits.processor';
 import { KeeperService } from './keeper.service';
 import { LifecycleService } from './lifecycle.service';
+import { TriggerFallbackProcessor } from './trigger-fallback.processor';
 import { WinnerWatcherService } from './winner-watcher.service';
 
 @Module({
-  imports: [
-    ScannerModule,
-    ChainModule,
-    ContractModule,
-    ConfigModule,
-    CacheModule,
-  ],
+  imports: [ScannerModule, ChainModule, ContractModule, ConfigModule],
   providers: [
     KeeperService,
     BatchStateService,
     LifecycleService,
     WinnerWatcherService,
+    CloseCommitsProcessor,
+    TriggerFallbackProcessor,
   ],
   exports: [
     KeeperService,
