@@ -1,7 +1,7 @@
-import { IntentEvent } from 'src/scanner/scanner.types';
+import { IntentCreatedEventType } from 'src/common/contracts';
 
 export interface BatchInput {
-  intents: IntentEvent[];
+  intents: IntentCreatedEventType[];
   batchId: string;
 }
 

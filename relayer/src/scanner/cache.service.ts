@@ -7,6 +7,18 @@ type RedisClientType = ReturnType<typeof createClient>;
 export class CacheService {
   private client: RedisClientType | null = null;
   private logger = new Logger(CacheService.name);
+  private readyPromise: Promise<void>;
+  private resolveReady!: () => void;
+
+  constructor() {
+    this.readyPromise = new Promise((resolve) => {
+      this.resolveReady = resolve;
+    });
+  }
+
+  async waitForReady(): Promise<void> {
+    return this.readyPromise;
+  }
 
   async onModuleInit() {
     try {
@@ -22,6 +34,7 @@ export class CacheService {
       this.client.on('connect', () => this.logger.log('Redis connected'));
 
       await this.client.connect();
+      this.resolveReady();
     } catch (error) {
       this.logger.error('Failed to connect to Redis', error);
       throw error;

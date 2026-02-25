@@ -7,8 +7,8 @@ import {
 import { EventEmitter } from 'events';
 import { ChainService } from 'src/chain/chain.service';
 import { CacheService } from './cache.service';
-import { IntentEvent, PollResult } from './scanner.types';
 import { INTENT_BOOK } from 'src/contracts';
+import { IntentCreatedEventType } from 'src/common/contracts';
 
 @Injectable()
 export class ScannerService
@@ -18,11 +18,12 @@ export class ScannerService
   private logger = new Logger(ScannerService.name);
   private cursor: string | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
-  private eventBuffer: IntentEvent[] = [];
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  private events: IntentCreatedEventType[] = [];
+  private eventBuffer: IntentCreatedEventType[] = [];
   private isRunning = false;
 
-  private readonly POLLING_INTERVAL_MS = 2000;
+  private readonly POLLING_INTERVAL_MS = 1000;
   private readonly BATCH_SIZE = 10;
   private readonly BATCH_TIMEOUT_MS = 5000;
   private readonly EVENTS_LIMIT = 50;
@@ -37,6 +38,7 @@ export class ScannerService
   }
 
   async onModuleInit() {
+    await this.cacheService.waitForReady();
     await this.loadCursor();
     this.startPolling();
   }
@@ -78,7 +80,7 @@ export class ScannerService
     }
   }
 
-  private async fetchNewIntents(): Promise<PollResult> {
+  private async fetchNewIntents() {
     return await this.chainService.queryEventsPaginated({
       module: INTENT_BOOK.MODULE_NAME,
       eventType: INTENT_BOOK.EVENTS.INTENT_CREATED,
@@ -87,44 +89,32 @@ export class ScannerService
     });
   }
 
-  private async processPollResult(result: PollResult) {
-    if (!result.data || result.data.length === 0) {
+  private async processPollResult(
+    result: Awaited<ReturnType<typeof this.chainService.queryEventsPaginated>>,
+  ) {
+    if (!result) {
       return;
     }
 
-    for (const event of result.data) {
-      const intent = this.parseIntentEvent(event);
-      if (intent) {
-        this.addToBuffer(intent);
+    if ('nodes' in result) {
+      for (const event of result.nodes) {
+        if (event?.contents?.json) {
+          this.logger.debug(
+            `Processing event with JSON: ${JSON.stringify(event.contents.json)}`,
+          );
+
+          this.addToBuffer(event.contents.json as IntentCreatedEventType);
+        }
       }
     }
 
-    if (result.nextCursor && typeof result.nextCursor === 'string') {
-      this.cursor = result.nextCursor;
+    if ('pageInfo' in result && result.pageInfo?.endCursor) {
+      this.cursor = result.pageInfo.endCursor;
       await this.saveCursor();
     }
   }
 
-  private parseIntentEvent(event: any): IntentEvent | null {
-    try {
-      return {
-        id: event.id,
-        owner: event.owner,
-        sellAmount: BigInt(event.sell_amount || event.sellAmount || 0),
-        minAmountOut: BigInt(event.min_amount_out || event.minAmountOut || 0),
-        deadline: BigInt(event.deadline || 0),
-        txDigest: event.txDigest,
-        eventSeq: event.eventSeq,
-        timestamp: Date.now(),
-        eventBcs: event.eventBcs,
-      };
-    } catch (err) {
-      this.logger.warn(`Failed to parse intent event: ${err}`);
-      return null;
-    }
-  }
-
-  private addToBuffer(intent: IntentEvent) {
+  private addToBuffer(intent: IntentCreatedEventType) {
     this.eventBuffer.push(intent);
 
     if (this.eventBuffer.length >= this.BATCH_SIZE) {
@@ -153,8 +143,7 @@ export class ScannerService
     this.emit('intents', batch);
   }
 
-  onIntent(listener: (intents: IntentEvent[]) => Promise<void>) {
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  onIntent(listener: (intents: IntentCreatedEventType[]) => void) {
     this.on('intents', listener);
   }
 

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SuiGraphQLClient } from '@mysten/sui/graphql';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { RelayConfigService } from '../config/relay-config.service';
+import { graphql } from '@mysten/sui/graphql/schema';
 
 @Injectable()
 export class ChainService implements OnModuleInit {
@@ -73,18 +74,27 @@ export class ChainService implements OnModuleInit {
     const packageId = this.config.getCowDexPackageId();
     const eventType = `${packageId}::${query.module}::${query.eventType}`;
 
-    const graphqlQuery = `
+    const graphqlQuery = graphql(`
       query QueryEvents($type: String, $first: Int, $after: String) {
         events(filter: { type: $type }, first: $first, after: $after) {
           nodes {
             transactionModule {
-              package { address }
+              package {
+                address
+              }
               name
             }
-            sender { address }
+            sender {
+              address
+            }
             timestamp
-            eventBcs
-            transaction { digest }
+            contents {
+              bcs
+              json
+            }
+            transaction {
+              digest
+            }
           }
           pageInfo {
             hasNextPage
@@ -92,7 +102,7 @@ export class ChainService implements OnModuleInit {
           }
         }
       }
-    `;
+    `);
 
     try {
       const response = await client.query({
@@ -106,46 +116,21 @@ export class ChainService implements OnModuleInit {
       this.logger.debug(
         `Queried events with type ${eventType}, limit ${query.limit}, cursor ${query.cursor}`,
       );
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const eventData = response.data as any;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-      const events = eventData?.events?.nodes || [];
 
-      if (events.length > 0) {
-        this.logger.debug(
-          `First event structure: ${JSON.stringify(Object.keys(events[0]))}`,
-        );
-        this.logger.debug(`First event data: ${JSON.stringify(events[0])}`);
+      if (!response.data) {
+        this.logger.warn('No data returned from GraphQL query');
+        return { data: [], nextCursor: null };
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-      const nextCursor = eventData?.events?.pageInfo?.endCursor;
+      const queryResult = response.data;
+      const events = queryResult.events;
 
-      return {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-        data: events.map((event: any, index: number) => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          const txDigest = (event.transaction?.digest as string) || '';
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          const eventBcs = (event.eventBcs as string) || '';
-          return {
-            id: `${txDigest}_${index}`,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            owner: (event.sender?.address as string) || '',
-            // Placeholder values - will be extracted from eventBcs in scanner
-            sellAmount: 0n,
-            minAmountOut: 0n,
-            deadline: 0n,
-            txDigest,
-            eventSeq: index,
-            eventBcs,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            timestamp: parseInt(event.timestamp as string) || Date.now(),
-          };
-        }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        nextCursor,
-      };
+      if (!events || !events.nodes) {
+        this.logger.warn('No events found in GraphQL response');
+        return { data: [], nextCursor: null };
+      }
+
+      return events;
     } catch (error) {
       this.logger.error('Failed to query events', error);
       throw error;
