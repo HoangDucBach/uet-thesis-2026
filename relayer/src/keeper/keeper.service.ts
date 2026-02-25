@@ -13,6 +13,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
 import { BatchInput, BatchOpenResult, BatchStatus } from './keeper.types';
+import { LifecycleService } from './lifecycle.service';
 
 @Injectable()
 export class KeeperService implements OnModuleInit {
@@ -32,6 +33,7 @@ export class KeeperService implements OnModuleInit {
     private readonly contractConfig: ContractConfigService,
     private readonly relayConfig: RelayConfigService,
     private readonly batchState: BatchStateService,
+    private readonly lifecycle: LifecycleService,
   ) {
     this.globalConfigId = this.relayConfig.getGlobalConfigId();
   }
@@ -83,12 +85,18 @@ export class KeeperService implements OnModuleInit {
           txDigest: result.txDigest,
           intentCount: intents.length,
           openedAt: result.timestamp,
+          commitEndTime: Number(result.commitEndTime),
+          executeDeadlineTime: Number(result.executeDeadlineTime),
         }),
         this.batchState.setAuctionStateId(
           result.onChainBatchId.toString(),
           result.auctionStateId,
         ),
       ]);
+
+      // Schedule close_commits and trigger_fallback timers
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      this.lifecycle.scheduleBatch(result);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -113,8 +121,13 @@ export class KeeperService implements OnModuleInit {
 
     this.logger.debug(`Intent IDs for batch: ${JSON.stringify(intentIds)}`);
 
-    const { batchOpenedEventData, txDigest } =
-      await this.openBatchExecutor(intentIds);
+    // Use a timestamp-based u64 as the on-chain batch_id — unique across restarts
+    const proposedOnChainBatchId = BigInt(Date.now());
+
+    const { batchOpenedEventData, txDigest } = await this.openBatchExecutor(
+      intentIds,
+      proposedOnChainBatchId,
+    );
 
     return {
       localBatchId: batch.batchId,
@@ -127,7 +140,7 @@ export class KeeperService implements OnModuleInit {
     };
   }
 
-  private async openBatchExecutor(intentIds: string[]) {
+  private async openBatchExecutor(intentIds: string[], onChainBatchId: bigint) {
     const executor = new SerialTransactionExecutor({
       client: this.chainService.getClient(),
       signer: this.chainService.getKeypair(),
@@ -142,6 +155,7 @@ export class KeeperService implements OnModuleInit {
       function: SETTLEMENT.FUNCTIONS.OPEN_BATCH_AND_SHARE,
       arguments: [
         tx.object(this.globalConfigId),
+        tx.pure.u64(onChainBatchId),
         tx.pure.vector('id', intentIds),
         tx.object.clock(),
       ],

@@ -1,8 +1,9 @@
+import { Network } from 'src/common';
+import { COW_DEX, DEEPBOOK } from 'src/contracts/constants';
+
 import { getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Network } from 'src/common';
-import { DEEPBOOK, COW_DEX } from 'src/contracts/constants';
 
 @Injectable()
 export class RelayConfigService {

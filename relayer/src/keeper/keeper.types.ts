@@ -32,5 +32,9 @@ export interface BatchStatus {
   intentCount: number;
   openedAt?: number;
   settledAt?: number;
+  /** Millisecond timestamp after which close_commits should be called */
+  commitEndTime?: number;
+  /** Millisecond timestamp after which trigger_fallback should be called if not settled */
+  executeDeadlineTime?: number;
   error?: string;
 }

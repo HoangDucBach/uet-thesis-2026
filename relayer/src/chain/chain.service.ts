@@ -1,8 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SuiGraphQLClient } from '@mysten/sui/graphql';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { RelayConfigService } from '../config/relay-config.service';
 import { graphql } from '@mysten/sui/graphql/schema';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+
+import { RelayConfigService } from '../config/relay-config.service';
 
 @Injectable()
 export class ChainService implements OnModuleInit {

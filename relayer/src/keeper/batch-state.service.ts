@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { CacheService } from 'src/cache/cache.service';
+
+import { Injectable, Logger } from '@nestjs/common';
+
 import { BatchStatus } from './keeper.types';
 
 const BATCH_STATUS_PREFIX = 'keeper:batch:status:';
@@ -55,11 +57,38 @@ export class BatchStateService {
     return await this.cache.get(`${BATCH_AUCTION_PREFIX}${onChainBatchId}`);
   }
 
+  async updateStatus(
+    localBatchId: string,
+    updates: Partial<Omit<BatchStatus, 'localBatchId'>>,
+  ): Promise<void> {
+    const existing = await this.get(localBatchId);
+    if (!existing) {
+      this.logger.warn(
+        `updateStatus: batch ${localBatchId} not found in Redis`,
+      );
+      return;
+    }
+    await this.set({ ...existing, ...updates });
+  }
+
+  async getByOnChainBatchId(
+    onChainBatchId: bigint,
+  ): Promise<BatchStatus | null> {
+    const all = await this.getAll();
+    return (
+      all.find(
+        (b) =>
+          b.onChainBatchId !== undefined && b.onChainBatchId === onChainBatchId,
+      ) ?? null
+    );
+  }
+
   // ── serialization ─────────────────────────────────────────────────────────
 
   private serialize(status: BatchStatus): string {
     return JSON.stringify(status, (_, value) =>
-      typeof value === 'bigint' ? value.toString() : 0,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      typeof value === 'bigint' ? value.toString() : value,
     );
   }
 

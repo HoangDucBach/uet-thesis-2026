@@ -1,14 +1,28 @@
-import { Module } from '@nestjs/common';
-import { ScannerModule } from 'src/scanner/scanner.module';
 import { ChainModule } from 'src/chain/chain.module';
-import { ContractModule } from 'src/contracts/contract.module';
 import { ConfigModule } from 'src/config/config.module';
-import { KeeperService } from './keeper.service';
+import { ContractModule } from 'src/contracts/contract.module';
+import { ScannerModule } from 'src/scanner/scanner.module';
+
+import { Module } from '@nestjs/common';
+
 import { BatchStateService } from './batch-state.service';
+import { KeeperService } from './keeper.service';
+import { LifecycleService } from './lifecycle.service';
+import { WinnerWatcherService } from './winner-watcher.service';
 
 @Module({
   imports: [ScannerModule, ChainModule, ContractModule, ConfigModule],
-  providers: [KeeperService, BatchStateService],
-  exports: [KeeperService, BatchStateService],
+  providers: [
+    KeeperService,
+    BatchStateService,
+    LifecycleService,
+    WinnerWatcherService,
+  ],
+  exports: [
+    KeeperService,
+    BatchStateService,
+    LifecycleService,
+    WinnerWatcherService,
+  ],
 })
 export class KeeperModule {}

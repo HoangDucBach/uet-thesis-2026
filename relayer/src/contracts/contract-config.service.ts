@@ -1,11 +1,13 @@
-import { Injectable } from '@nestjs/common';
 import { RelayConfigService } from 'src/config/relay-config.service';
+
+import { Injectable } from '@nestjs/common';
+
 import {
-  DEEPBOOK,
+  CONFIG,
   COW_DEX,
+  DEEPBOOK,
   INTENT_BOOK,
   SETTLEMENT,
-  CONFIG,
 } from './constants';
 
 /**
