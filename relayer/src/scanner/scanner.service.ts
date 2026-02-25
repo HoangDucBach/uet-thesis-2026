@@ -1,14 +1,15 @@
+import { EventEmitter } from 'events';
+import { CacheService } from 'src/cache/cache.service';
+import { ChainService } from 'src/chain/chain.service';
+import { IntentCreatedEventType } from 'src/common/contracts';
+import { INTENT_BOOK } from 'src/contracts';
+
 import {
   Injectable,
   Logger,
-  OnModuleInit,
   OnApplicationShutdown,
+  OnModuleInit,
 } from '@nestjs/common';
-import { EventEmitter } from 'events';
-import { ChainService } from 'src/chain/chain.service';
-import { CacheService } from 'src/cache/cache.service';
-import { INTENT_BOOK } from 'src/contracts';
-import { IntentCreatedEventType } from 'src/common/contracts';
 
 @Injectable()
 export class ScannerService

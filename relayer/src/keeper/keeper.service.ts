@@ -1,16 +1,18 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ScannerService } from 'src/scanner/scanner.service';
 import { ChainService } from 'src/chain/chain.service';
-import { ContractConfigService } from 'src/contracts/contract-config.service';
+import { BatchOpenedEvent, IntentCreatedEventType } from 'src/common/contracts';
 import { RelayConfigService } from 'src/config/relay-config.service';
-import { BatchStateService } from './batch-state.service';
-import { BatchInput, BatchOpenResult, BatchStatus } from './keeper.types';
+import { SETTLEMENT } from 'src/contracts/constants';
+import { ContractConfigService } from 'src/contracts/contract-config.service';
+import { ScannerService } from 'src/scanner/scanner.service';
+
 import {
   SerialTransactionExecutor,
   Transaction,
 } from '@mysten/sui/transactions';
-import { SETTLEMENT } from 'src/contracts/constants';
-import { BatchOpenedEvent, IntentCreatedEventType } from 'src/common/contracts';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+
+import { BatchStateService } from './batch-state.service';
+import { BatchInput, BatchOpenResult, BatchStatus } from './keeper.types';
 
 @Injectable()
 export class KeeperService implements OnModuleInit {
