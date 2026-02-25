@@ -6,7 +6,7 @@ type RedisClientType = ReturnType<typeof createClient>;
 @Injectable()
 export class CacheService {
   private client: RedisClientType | null = null;
-  private logger = new Logger(CacheService.name);
+  private readonly logger = new Logger(CacheService.name);
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
 
@@ -63,6 +63,18 @@ export class CacheService {
 
   async del(key: string): Promise<number> {
     return await this.getClient().del(key);
+  }
+
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    return await this.getClient().sAdd(key, members);
+  }
+
+  async smembers(key: string): Promise<string[]> {
+    return await this.getClient().sMembers(key);
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    return await this.getClient().expire(key, ttlSeconds);
   }
 
   async onApplicationShutdown() {

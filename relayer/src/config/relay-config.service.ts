@@ -37,24 +37,12 @@ export class RelayConfigService {
     return packageId;
   }
 
-  getDeepbookPackageId(): string {
-    const packageId = this.configService.get<string>(DEEPBOOK.PACKAGE_ID_ENV);
-    if (!packageId) {
-      throw new Error(
-        `${DEEPBOOK.PACKAGE_ID_ENV} is required but not set in environment variables`,
-      );
-    }
-    return packageId;
+  getDeepbookPackageId(): string | undefined {
+    return this.configService.get<string>(DEEPBOOK.PACKAGE_ID_ENV);
   }
 
-  getDeepbookRegistryId(): string {
-    const registryId = this.configService.get<string>(DEEPBOOK.REGISTRY_ID_ENV);
-    if (!registryId) {
-      throw new Error(
-        `${DEEPBOOK.REGISTRY_ID_ENV} is required but not set in environment variables`,
-      );
-    }
-    return registryId;
+  getDeepbookRegistryId(): string | undefined {
+    return this.configService.get<string>(DEEPBOOK.REGISTRY_ID_ENV);
   }
 
   getGlobalConfigId(): string {

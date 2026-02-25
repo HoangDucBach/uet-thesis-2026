@@ -6,7 +6,11 @@ export interface BatchInput {
 }
 
 export interface BatchOpenResult {
-  batchId: string;
+  /** Local string handle used before on-chain batch_id is known */
+  localBatchId: string;
+  /** Canonical on-chain batch id from BatchOpenedEvent */
+  onChainBatchId: bigint;
+  auctionStateId: string;
   txDigest: string;
   commitEndTime: bigint;
   executeDeadlineTime: bigint;
@@ -14,7 +18,9 @@ export interface BatchOpenResult {
 }
 
 export interface BatchStatus {
-  batchId: string;
+  localBatchId: string;
+  onChainBatchId?: bigint;
+  auctionStateId?: string;
   status:
     | 'pending'
     | 'opened'

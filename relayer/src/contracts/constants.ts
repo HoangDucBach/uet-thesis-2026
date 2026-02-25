@@ -144,6 +144,7 @@ export const SETTLEMENT = {
 
   // Events
   EVENTS: {
+    BATCH_OPENED: 'BatchOpenedEvent',
     WINNER_SELECTED: 'WinnerSelectedEvent',
     SETTLEMENT_COMPLETE: 'SettlementCompleteEvent',
     FALLBACK_TRIGGERED: 'FallbackTriggeredEvent',

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { EventEmitter } from 'events';
 import { ChainService } from 'src/chain/chain.service';
-import { CacheService } from './cache.service';
+import { CacheService } from 'src/cache/cache.service';
 import { INTENT_BOOK } from 'src/contracts';
 import { IntentCreatedEventType } from 'src/common/contracts';
 

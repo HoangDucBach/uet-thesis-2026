@@ -20,7 +20,6 @@ export class ChainService implements OnModuleInit {
 
       const network = this.config.getNetwork();
 
-      // Use GraphQL endpoint for event querying
       const graphqlUrl = this.getGraphQLUrl(network);
       if (!graphqlUrl) {
         throw new Error(`No GraphQL URL configured for network: ${network}`);

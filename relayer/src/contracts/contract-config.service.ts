@@ -18,9 +18,9 @@ import {
  */
 @Injectable()
 export class ContractConfigService {
-  private deepbookPackageId: string;
+  private deepbookPackageId: string | undefined;
   private cowDexPackageId: string;
-  private deepbookRegistryId: string;
+  private deepbookRegistryId: string | undefined;
 
   constructor(private relayConfig: RelayConfigService) {
     this.deepbookPackageId = this.relayConfig.getDeepbookPackageId();
@@ -33,15 +33,21 @@ export class ContractConfigService {
   // ========================================================================
 
   getDeepbookPackageId(): string {
+    if (!this.deepbookPackageId) {
+      throw new Error('DEEPBOOK_PACKAGE_ID is not set');
+    }
     return this.deepbookPackageId;
   }
 
   getDeepbookRegistryId(): string {
+    if (!this.deepbookRegistryId) {
+      throw new Error('DEEPBOOK_REGISTRY_ID is not set');
+    }
     return this.deepbookRegistryId;
   }
 
   getDeepbookQualified(item: string): string {
-    return DEEPBOOK.qualified(this.deepbookPackageId, item);
+    return DEEPBOOK.qualified(this.getDeepbookPackageId(), item);
   }
 
   getDeepbookType(typeKey: keyof typeof DEEPBOOK.TYPES): string {
