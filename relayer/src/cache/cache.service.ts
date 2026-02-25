@@ -41,7 +41,7 @@ export class CacheService {
     }
   }
 
-  private getClient(): RedisClientType {
+  getClient(): RedisClientType {
     if (!this.client) {
       throw new Error('Redis client not initialized');
     }

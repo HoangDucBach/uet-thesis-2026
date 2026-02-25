@@ -1,4 +1,5 @@
 import { ChainService } from 'src/chain/chain.service';
+import { CacheService } from 'src/cache/cache.service';
 import { SETTLEMENT } from 'src/contracts/constants';
 import { ContractConfigService } from 'src/contracts/contract-config.service';
 
@@ -9,21 +10,24 @@ import {
 import {
   Injectable,
   Logger,
-  OnModuleDestroy,
   OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
+import { Queue, Worker } from 'bullmq';
 
 import { BatchStateService } from './batch-state.service';
 import { BatchOpenResult } from './keeper.types';
 
 /**
- * Transaction Pool Pattern Implementation:
- * - Single shared SerialTransactionExecutor (initialized once, reused for all operations)
- * - Transactions queued per operation type (closeCommits, triggerFallback)
- * - Batch flushing every 50ms or when queue reaches 10 items
- * - Parallel execution via Promise.allSettled()
+ * Lifecycle Management with Bull Queue Scheduler:
+ * - Uses BullMQ for accurate (±100ms) delayed job scheduling
+ * - Jobs persisted in Redis, survive process restarts
+ * - Single shared SerialTransactionExecutor for on-chain calls
+ * - Parallel batch execution via Promise.allSettled()
  *
- * Expected performance: 6-10x throughput improvement for concurrent batches.
+ * Job types:
+ *   - closeCommits: executed when now >= commitEndTime
+ *   - triggerFallback: executed when now >= executeDeadlineTime
  */
 @Injectable()
 export class LifecycleService implements OnModuleInit, OnModuleDestroy {
@@ -32,28 +36,20 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
   private executor: SerialTransactionExecutor | null = null;
   private readonly scheduled = new Set<string>();
 
-  private readonly FLUSH_INTERVAL_MS = 50;
-  private readonly MAX_QUEUE_SIZE = 10;
+  private closeCommitsQueue: Queue | null = null;
+  private triggerFallbackQueue: Queue | null = null;
 
-  private readonly closeCommitsQueue: Array<{
-    tx: Transaction;
-    auctionStateId: string;
-    localBatchId: string;
-  }> = [];
+  private closeCommitsWorker: Worker | null = null;
+  private triggerFallbackWorker: Worker | null = null;
 
-  private readonly triggerFallbackQueue: Array<{
-    tx: Transaction;
-    auctionStateId: string;
-    localBatchId: string;
-  }> = [];
-
-  private closeCommitsFlusher: NodeJS.Timeout | null = null;
-  private fallbackFlusher: NodeJS.Timeout | null = null;
+  private readonly CLOSE_COMMITS_QUEUE_NAME = 'lifecycle:closeCommits';
+  private readonly TRIGGER_FALLBACK_QUEUE_NAME = 'lifecycle:triggerFallback';
 
   constructor(
     private readonly chainService: ChainService,
     private readonly contractConfig: ContractConfigService,
     private readonly batchState: BatchStateService,
+    private readonly cache: CacheService,
   ) {}
 
   async onModuleInit() {
@@ -62,6 +58,37 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
       signer: this.chainService.getKeypair(),
     });
 
+    const redisClient = this.cache.getClient();
+
+    // Initialize Bull queues
+    this.closeCommitsQueue = new Queue(this.CLOSE_COMMITS_QUEUE_NAME, {
+      connection: redisClient as any, // BullMQ accepts native Redis client
+    });
+
+    this.triggerFallbackQueue = new Queue(this.TRIGGER_FALLBACK_QUEUE_NAME, {
+      connection: redisClient as any,
+    });
+
+    // Setup workers with concurrency 1 (SerialExecutor is serialized)
+    this.closeCommitsWorker = new Worker(
+      this.CLOSE_COMMITS_QUEUE_NAME,
+      async (job) => this.handleCloseCommits(job.data),
+      {
+        connection: redisClient as any,
+        concurrency: 1,
+      },
+    );
+
+    this.triggerFallbackWorker = new Worker(
+      this.TRIGGER_FALLBACK_QUEUE_NAME,
+      async (job) => this.handleTriggerFallback(job.data),
+      {
+        connection: redisClient as any,
+        concurrency: 1,
+      },
+    );
+
+    // Recover any pending batches
     const batches = await this.batchState.getAll();
     let recovered = 0;
 
@@ -88,9 +115,19 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    // Drain remaining queues before shutdown
-    await this.flushCloseCommits();
-    await this.flushTriggerFallback();
+    // Close workers and queues gracefully
+    if (this.closeCommitsWorker) {
+      await this.closeCommitsWorker.close();
+    }
+    if (this.triggerFallbackWorker) {
+      await this.triggerFallbackWorker.close();
+    }
+    if (this.closeCommitsQueue) {
+      await this.closeCommitsQueue.close();
+    }
+    if (this.triggerFallbackQueue) {
+      await this.triggerFallbackQueue.close();
+    }
   }
 
   scheduleBatch(
@@ -118,16 +155,26 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
         `close_commits in ${commitDelay}ms, trigger_fallback in ${fallbackDelay}ms`,
     );
 
-    setTimeout(() => {
-      void this.queueCloseCommits(auctionStateId, localBatchId);
-    }, commitDelay);
+    // Schedule via Bull Queue with delay (persisted in Redis)
+    void this.closeCommitsQueue?.add(
+      `closeCommits-${auctionStateId}`,
+      { auctionStateId, localBatchId },
+      { delay: commitDelay, removeOnComplete: true },
+    );
 
-    setTimeout(() => {
-      void this.queueTriggerFallback(auctionStateId, localBatchId);
-    }, fallbackDelay);
+    void this.triggerFallbackQueue?.add(
+      `triggerFallback-${auctionStateId}`,
+      { auctionStateId, localBatchId },
+      { delay: fallbackDelay, removeOnComplete: true },
+    );
   }
 
-  private queueCloseCommits(auctionStateId: string, localBatchId: string) {
+  private async handleCloseCommits(data: {
+    auctionStateId: string;
+    localBatchId: string;
+  }) {
+    const { auctionStateId, localBatchId } = data;
+
     const pkg = this.contractConfig.getCowDexPackageId();
     const tx = new Transaction();
     tx.moveCall({
@@ -137,16 +184,39 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
       arguments: [tx.object(auctionStateId), tx.object.clock()],
     });
 
-    this.closeCommitsQueue.push({ tx, auctionStateId, localBatchId });
+    const result = await this.executor!.executeTransaction(tx);
 
-    if (this.closeCommitsQueue.length >= this.MAX_QUEUE_SIZE) {
-      this.flushCloseCommits();
-    } else {
-      this.scheduleCloseCommitsFlusher();
+    if (result.$kind === 'FailedTransaction') {
+      this.logger.error(
+        `closeCommits failed for ${auctionStateId}: ${result.FailedTransaction.status.error?.message}`,
+      );
+      throw new Error(
+        `closeCommits transaction failed: ${result.FailedTransaction.status.error?.message}`,
+      );
     }
+
+    this.logger.log(
+      `closeCommits ok auctionState=${auctionStateId} digest=${result.Transaction.digest}`,
+    );
+
+    await this.batchState.updateStatus(localBatchId, { status: 'committed' });
   }
 
-  private queueTriggerFallback(auctionStateId: string, localBatchId: string) {
+  private async handleTriggerFallback(data: {
+    auctionStateId: string;
+    localBatchId: string;
+  }) {
+    const { auctionStateId, localBatchId } = data;
+
+    // Check if batch already settled
+    const current = await this.batchState.get(localBatchId);
+    if (current?.status === 'settled') {
+      this.logger.log(
+        `Batch ${localBatchId} already settled — skipping trigger_fallback`,
+      );
+      return;
+    }
+
     const pkg = this.contractConfig.getCowDexPackageId();
     const tx = new Transaction();
     tx.moveCall({
@@ -156,120 +226,24 @@ export class LifecycleService implements OnModuleInit, OnModuleDestroy {
       arguments: [tx.object(auctionStateId), tx.object.clock()],
     });
 
-    this.triggerFallbackQueue.push({ tx, auctionStateId, localBatchId });
+    const result = await this.executor!.executeTransaction(tx);
 
-    if (this.triggerFallbackQueue.length >= this.MAX_QUEUE_SIZE) {
-      this.flushTriggerFallback();
-    } else {
-      this.scheduleTriggerFallbackFlusher();
-    }
-  }
-
-  private scheduleCloseCommitsFlusher() {
-    if (this.closeCommitsFlusher) return;
-    this.closeCommitsFlusher = setTimeout(
-      () => void this.flushCloseCommits(),
-      this.FLUSH_INTERVAL_MS,
-    );
-  }
-
-  private scheduleTriggerFallbackFlusher() {
-    if (this.fallbackFlusher) return;
-    this.fallbackFlusher = setTimeout(
-      () => void this.flushTriggerFallback(),
-      this.FLUSH_INTERVAL_MS,
-    );
-  }
-
-  private async flushCloseCommits() {
-    if (this.closeCommitsFlusher) {
-      clearTimeout(this.closeCommitsFlusher);
-      this.closeCommitsFlusher = null;
+    if (result.$kind === 'FailedTransaction') {
+      this.logger.error(
+        `triggerFallback failed for ${auctionStateId}: ${result.FailedTransaction.status.error?.message}`,
+      );
+      throw new Error(
+        `triggerFallback transaction failed: ${result.FailedTransaction.status.error?.message}`,
+      );
     }
 
-    if (this.closeCommitsQueue.length === 0) return;
-
-    const batch = this.closeCommitsQueue.splice(0);
-    this.logger.debug(`Flushing ${batch.length} closeCommits transactions`);
-
-    const results = await Promise.allSettled(
-      batch.map((item) => this.executor!.executeTransaction(item.tx)),
+    this.logger.log(
+      `triggerFallback ok auctionState=${auctionStateId} digest=${result.Transaction.digest}`,
     );
 
-    for (let i = 0; i < results.length; i++) {
-      const item = batch[i];
-      const result = results[i];
-
-      if (result.status === 'fulfilled') {
-        const txResult = result.value;
-        if (txResult.$kind === 'FailedTransaction') {
-          this.logger.error(
-            `closeCommits failed for ${item.auctionStateId}: ${txResult.FailedTransaction.status.error?.message}`,
-          );
-        } else {
-          this.logger.log(
-            `closeCommits ok auctionState=${item.auctionStateId} digest=${txResult.Transaction.digest}`,
-          );
-          this.batchState
-            .updateStatus(item.localBatchId, { status: 'committed' })
-            .catch((err) => {
-              this.logger.error('Failed to update batch status', err);
-            });
-        }
-      } else {
-        this.logger.error(
-          `closeCommits execution error for ${item.auctionStateId}:`,
-          result.reason,
-        );
-      }
-    }
-  }
-
-  private async flushTriggerFallback() {
-    if (this.fallbackFlusher) {
-      clearTimeout(this.fallbackFlusher);
-      this.fallbackFlusher = null;
-    }
-
-    if (this.triggerFallbackQueue.length === 0) return;
-
-    const batch = this.triggerFallbackQueue.splice(0);
-    this.logger.debug(`Flushing ${batch.length} triggerFallback transactions`);
-
-    const results = await Promise.allSettled(
-      batch.map((item) => this.executor!.executeTransaction(item.tx)),
-    );
-
-    for (let i = 0; i < results.length; i++) {
-      const item = batch[i];
-      const result = results[i];
-
-      if (result.status === 'fulfilled') {
-        const txResult = result.value;
-        if (txResult.$kind === 'FailedTransaction') {
-          this.logger.error(
-            `triggerFallback failed for ${item.auctionStateId}: ${txResult.FailedTransaction.status.error?.message}`,
-          );
-        } else {
-          this.logger.log(
-            `triggerFallback ok auctionState=${item.auctionStateId} digest=${txResult.Transaction.digest}`,
-          );
-          this.batchState
-            .updateStatus(item.localBatchId, {
-              status: 'failed',
-              error:
-                'trigger_fallback executed — winner did not settle in time',
-            })
-            .catch((err) => {
-              this.logger.error('Failed to update batch status', err);
-            });
-        }
-      } else {
-        this.logger.error(
-          `triggerFallback execution error for ${item.auctionStateId}:`,
-          result.reason,
-        );
-      }
-    }
+    await this.batchState.updateStatus(localBatchId, {
+      status: 'failed',
+      error: 'trigger_fallback executed — winner did not settle in time',
+    });
   }
 }

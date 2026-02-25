@@ -1,3 +1,4 @@
+import { CacheModule } from 'src/cache/cache.module';
 import { ChainModule } from 'src/chain/chain.module';
 import { ConfigModule } from 'src/config/config.module';
 import { ContractModule } from 'src/contracts/contract.module';
@@ -11,7 +12,13 @@ import { LifecycleService } from './lifecycle.service';
 import { WinnerWatcherService } from './winner-watcher.service';
 
 @Module({
-  imports: [ScannerModule, ChainModule, ContractModule, ConfigModule],
+  imports: [
+    ScannerModule,
+    ChainModule,
+    ContractModule,
+    ConfigModule,
+    CacheModule,
+  ],
   providers: [
     KeeperService,
     BatchStateService,
