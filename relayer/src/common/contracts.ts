@@ -1,7 +1,12 @@
-import { bcs } from '@mysten/bcs';
+import { bcs, fromHex, toHex } from '@mysten/bcs';
 
 export const TypeName = bcs.struct('TypeName', {
   name: bcs.string(),
+});
+
+const Address = bcs.fixedArray(32, bcs.u8()).transform({
+  input: (id: string) => fromHex(id.replace('0x', '')),
+  output: (id) => `0x${toHex(Uint8Array.from(id))}`,
 });
 
 export const IntentCreatedEvent = bcs.struct('IntentCreatedEvent', {
@@ -18,8 +23,8 @@ export type IntentCreatedEventType = typeof IntentCreatedEvent.$inferType;
 
 export const BatchOpenedEvent = bcs.struct('BatchOpenedEvent', {
   batch_id: bcs.u64(),
-  auction_state_id: bcs.string(),
-  intent_ids: bcs.vector(bcs.string()),
+  auction_state_id: Address,
+  intent_ids: bcs.vector(Address),
   commit_end_ms: bcs.u64(),
   execute_deadline_ms: bcs.u64(),
 });

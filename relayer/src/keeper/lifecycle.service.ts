@@ -1,6 +1,7 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+
+import { InjectQueue } from '@nestjs/bullmq';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
 import { BatchOpenResult } from './keeper.types';
