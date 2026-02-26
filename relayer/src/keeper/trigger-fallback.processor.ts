@@ -7,7 +7,7 @@ import {
   Transaction,
 } from '@mysten/sui/transactions';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Job } from 'bullmq';
 
 import { BatchStateService } from './batch-state.service';
@@ -18,7 +18,7 @@ import { BatchStateService } from './batch-state.service';
  */
 @Injectable()
 @Processor('lifecycleTriggerFallback')
-export class TriggerFallbackProcessor extends WorkerHost {
+export class TriggerFallbackProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(TriggerFallbackProcessor.name);
   private executor: SerialTransactionExecutor | null = null;
 
@@ -28,10 +28,14 @@ export class TriggerFallbackProcessor extends WorkerHost {
     private readonly batchState: BatchStateService,
   ) {
     super();
+  }
+
+  onModuleInit() {
     this.executor = new SerialTransactionExecutor({
       client: this.chainService.getClient(),
       signer: this.chainService.getKeypair(),
     });
+    this.logger.log('SerialTransactionExecutor initialized');
   }
 
   async process(job: Job<{ auctionStateId: string; localBatchId: string }>) {

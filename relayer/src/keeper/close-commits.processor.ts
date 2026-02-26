@@ -1,3 +1,4 @@
+import { Job } from 'bullmq';
 import { ChainService } from 'src/chain/chain.service';
 import { SETTLEMENT } from 'src/contracts/constants';
 import { ContractConfigService } from 'src/contracts/contract-config.service';
@@ -7,8 +8,7 @@ import {
   Transaction,
 } from '@mysten/sui/transactions';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
-import { Job } from 'bullmq';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
 
@@ -18,7 +18,7 @@ import { BatchStateService } from './batch-state.service';
  */
 @Injectable()
 @Processor('lifecycleCloseCommits')
-export class CloseCommitsProcessor extends WorkerHost {
+export class CloseCommitsProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(CloseCommitsProcessor.name);
   private executor: SerialTransactionExecutor | null = null;
 
@@ -28,10 +28,14 @@ export class CloseCommitsProcessor extends WorkerHost {
     private readonly batchState: BatchStateService,
   ) {
     super();
+  }
+
+  onModuleInit() {
     this.executor = new SerialTransactionExecutor({
       client: this.chainService.getClient(),
       signer: this.chainService.getKeypair(),
     });
+    this.logger.log('SerialTransactionExecutor initialized');
   }
 
   async process(job: Job<{ auctionStateId: string; localBatchId: string }>) {
