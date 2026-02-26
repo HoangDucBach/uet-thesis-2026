@@ -17,7 +17,7 @@ import { BatchStateService } from './batch-state.service';
  * Runs as a worker that processes queued close_commits transactions.
  */
 @Injectable()
-@Processor('lifecycle:closeCommits')
+@Processor('lifecycleCloseCommits')
 export class CloseCommitsProcessor extends WorkerHost {
   private readonly logger = new Logger(CloseCommitsProcessor.name);
   private executor: SerialTransactionExecutor | null = null;

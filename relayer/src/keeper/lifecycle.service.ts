@@ -23,9 +23,9 @@ export class LifecycleService implements OnModuleInit {
   private readonly scheduled = new Set<string>();
 
   constructor(
-    @InjectQueue('lifecycle:closeCommits')
+    @InjectQueue('lifecycleCloseCommits')
     private readonly closeCommitsQueue: Queue,
-    @InjectQueue('lifecycle:triggerFallback')
+    @InjectQueue('lifecycleTriggerFallback')
     private readonly triggerFallbackQueue: Queue,
     private readonly batchState: BatchStateService,
   ) {}

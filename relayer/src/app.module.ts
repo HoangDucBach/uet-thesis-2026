@@ -24,8 +24,8 @@ import { ChainModule } from './chain/chain.module';
       },
     }),
     BullModule.registerQueue(
-      { name: 'lifecycle:closeCommits' },
-      { name: 'lifecycle:triggerFallback' },
+      { name: 'lifecycleCloseCommits' },
+      { name: 'lifecycleTriggerFallback' },
     ),
     KeeperModule,
     ScannerModule,

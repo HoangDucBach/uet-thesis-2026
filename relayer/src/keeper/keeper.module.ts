@@ -19,7 +19,12 @@ import { WinnerWatcherService } from './winner-watcher.service';
     ChainModule,
     ContractModule,
     ConfigModule,
-    BullModule,
+    BullModule.registerQueue({
+      name: 'lifecycleCloseCommits',
+    }),
+    BullModule.registerQueue({
+      name: 'lifecycleTriggerFallback',
+    }),
   ],
   providers: [
     KeeperService,
