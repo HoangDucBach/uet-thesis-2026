@@ -3,6 +3,7 @@ import { ConfigModule } from 'src/config/config.module';
 import { ContractModule } from 'src/contracts/contract.module';
 import { ScannerModule } from 'src/scanner/scanner.module';
 
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
@@ -13,7 +14,13 @@ import { TriggerFallbackProcessor } from './trigger-fallback.processor';
 import { WinnerWatcherService } from './winner-watcher.service';
 
 @Module({
-  imports: [ScannerModule, ChainModule, ContractModule, ConfigModule],
+  imports: [
+    ScannerModule,
+    ChainModule,
+    ContractModule,
+    ConfigModule,
+    BullModule,
+  ],
   providers: [
     KeeperService,
     BatchStateService,
