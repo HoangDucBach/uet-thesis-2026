@@ -1,9 +1,11 @@
+import { GrpcModule } from 'src/grpc/grpc.module';
+
 import { Module } from '@nestjs/common';
-import { ChainModule } from 'src/chain/chain.module';
+
 import { ScannerService } from './scanner.service';
 
 @Module({
-  imports: [ChainModule],
+  imports: [GrpcModule],
   providers: [ScannerService],
   exports: [ScannerService],
 })

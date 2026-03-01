@@ -4,11 +4,12 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CacheModule } from './cache/cache.module';
+import { ChainModule } from './chain/chain.module';
 import { ConfigModule } from './config/config.module';
 import { ContractModule } from './contracts/contract.module';
+import { GrpcModule } from './grpc/grpc.module';
 import { KeeperModule } from './keeper/keeper.module';
 import { ScannerModule } from './scanner/scanner.module';
-import { ChainModule } from './chain/chain.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ChainModule } from './chain/chain.module';
     ConfigModule,
     ContractModule,
     ChainModule,
+    GrpcModule,
     BullModule.forRoot({
       connection: {
         host: process.env.REDIS_HOST || 'localhost',

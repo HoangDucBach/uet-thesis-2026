@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { createClient } from 'redis';
+
+import { Injectable, Logger } from '@nestjs/common';
 
 type RedisClientType = ReturnType<typeof createClient>;
 

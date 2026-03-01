@@ -19,3 +19,9 @@ build/
 **/build/
 **/*.mv
 **/*.mvd
+
+# Rust/Cargo build artifacts
+target/
+**/target/
+**/*.rs.bk
+Cargo.lock

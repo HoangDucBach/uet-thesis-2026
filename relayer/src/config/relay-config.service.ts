@@ -55,4 +55,12 @@ export class RelayConfigService {
     }
     return configId;
   }
+
+  getGrpcHost(): string {
+    return this.configService.get<string>('GRPC_HOST', 'localhost');
+  }
+
+  getGrpcPort(): number {
+    return this.configService.get<number>('GRPC_PORT', 50051);
+  }
 }

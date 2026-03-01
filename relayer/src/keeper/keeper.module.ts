@@ -1,6 +1,7 @@
 import { ChainModule } from 'src/chain/chain.module';
 import { ConfigModule } from 'src/config/config.module';
 import { ContractModule } from 'src/contracts/contract.module';
+import { GrpcModule } from 'src/grpc/grpc.module';
 import { ScannerModule } from 'src/scanner/scanner.module';
 
 import { BullModule } from '@nestjs/bullmq';
@@ -10,8 +11,8 @@ import { BatchStateService } from './batch-state.service';
 import { CloseCommitsProcessor } from './close-commits.processor';
 import { KeeperService } from './keeper.service';
 import { LifecycleService } from './lifecycle.service';
+import { SettlementWatcherService } from './settlement-watcher.service';
 import { TriggerFallbackProcessor } from './trigger-fallback.processor';
-import { WinnerWatcherService } from './winner-watcher.service';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { WinnerWatcherService } from './winner-watcher.service';
     ChainModule,
     ContractModule,
     ConfigModule,
+    GrpcModule,
     BullModule.registerQueue({
       name: 'lifecycleCloseCommits',
     }),
@@ -30,7 +32,7 @@ import { WinnerWatcherService } from './winner-watcher.service';
     KeeperService,
     BatchStateService,
     LifecycleService,
-    WinnerWatcherService,
+    SettlementWatcherService,
     CloseCommitsProcessor,
     TriggerFallbackProcessor,
   ],
@@ -38,7 +40,7 @@ import { WinnerWatcherService } from './winner-watcher.service';
     KeeperService,
     BatchStateService,
     LifecycleService,
-    WinnerWatcherService,
+    SettlementWatcherService,
   ],
 })
 export class KeeperModule {}

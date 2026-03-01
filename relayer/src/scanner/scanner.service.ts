@@ -1,8 +1,7 @@
 import { EventEmitter } from 'events';
-import { CacheService } from 'src/cache/cache.service';
-import { ChainService } from 'src/chain/chain.service';
 import { IntentCreatedEventType } from 'src/common/contracts';
 import { INTENT_BOOK } from 'src/contracts';
+import { CowEvent, GrpcClientService } from 'src/grpc';
 
 import {
   Injectable,
@@ -17,101 +16,38 @@ export class ScannerService
   implements OnModuleInit, OnApplicationShutdown
 {
   private logger = new Logger(ScannerService.name);
-  private cursor: string | null = null;
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
-  private events: IntentCreatedEventType[] = [];
   private eventBuffer: IntentCreatedEventType[] = [];
-  private isRunning = false;
 
-  private readonly POLLING_INTERVAL_MS = 1000;
   private readonly BATCH_SIZE = 10;
   private readonly BATCH_TIMEOUT_MS = 5000;
-  private readonly EVENTS_LIMIT = 50;
-  private readonly CURSOR_KEY = 'scanner:cursor';
-  private readonly CURSOR_TTL_SECONDS = 86400;
 
-  constructor(
-    private chainService: ChainService,
-    private cacheService: CacheService,
-  ) {
+  constructor(private grpcClient: GrpcClientService) {
     super();
   }
 
-  async onModuleInit() {
-    await this.cacheService.waitForReady();
-    await this.loadCursor();
-    this.startPolling();
-  }
-
-  private startPolling() {
-    if (this.isRunning) return;
-    this.isRunning = true;
-    this.logger.log('Scanner polling started');
-    this.schedulePoll();
-  }
-
-  private stopPolling() {
-    this.isRunning = false;
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
-    this.logger.log('Scanner polling stopped');
-  }
-
-  private schedulePoll() {
-    this.pollTimer = setTimeout(() => {
-      this.poll().catch((err) => {
-        this.logger.error(`Unhandled poll error: ${err}`, err);
-      });
-    }, this.POLLING_INTERVAL_MS);
-  }
-
-  private async poll() {
-    try {
-      const result = await this.fetchNewIntents();
-      await this.processPollResult(result);
-    } catch (err) {
-      this.logger.error(`Poll error: ${err}`, err);
-    } finally {
-      if (this.isRunning) {
-        this.schedulePoll();
-      }
-    }
-  }
-
-  private async fetchNewIntents() {
-    return await this.chainService.queryEventsPaginated({
-      module: INTENT_BOOK.MODULE_NAME,
-      eventType: INTENT_BOOK.EVENTS.INTENT_CREATED,
-      limit: this.EVENTS_LIMIT,
-      cursor: typeof this.cursor === 'string' ? this.cursor : undefined,
+  onModuleInit() {
+    this.grpcClient.onCowEvent((event: CowEvent) => {
+      this.handleCowEvent(event);
     });
+    this.logger.log('Scanner listening to gRPC COW events');
   }
 
-  private async processPollResult(
-    result: Awaited<ReturnType<typeof this.chainService.queryEventsPaginated>>,
-  ) {
-    if (!result) {
-      return;
-    }
+  private handleCowEvent(event: CowEvent) {
+    // Chỉ xử lý IntentCreated events
+    if (
+      event.module_name === INTENT_BOOK.MODULE_NAME &&
+      event.event_name === INTENT_BOOK.EVENTS.INTENT_CREATED
+    ) {
+      this.logger.debug(`Received IntentCreated event: tx=${event.tx_digest}`);
 
-    if ('nodes' in result) {
-      for (const event of result.nodes) {
-        if (event?.contents?.json) {
-          this.logger.debug(
-            `Processing event with JSON: ${JSON.stringify(event.contents.json)}`,
-          );
+      // Parse event data - trong thực tế cần decode từ event
+      // Tạm thời log để xem structure
+      this.logger.debug(`Event data: ${JSON.stringify(event)}`);
 
-          this.addToBuffer(event.contents.json as IntentCreatedEventType);
-        }
-      }
-    }
-
-    if ('pageInfo' in result && result.pageInfo?.endCursor) {
-      this.cursor = result.pageInfo.endCursor;
-      await this.saveCursor();
+      // TODO: Cần parse event.bcs hoặc event data để lấy IntentCreatedEventType
+      // Hiện tại tôi chỉ có metadata, cần full event data từ sidecar
+      // Tạm thời skip việc parse, chỉ log
     }
   }
 
@@ -148,34 +84,7 @@ export class ScannerService
     this.on('intents', listener);
   }
 
-  private async loadCursor() {
-    try {
-      const saved = await this.cacheService.get(this.CURSOR_KEY);
-      if (saved) {
-        this.cursor = saved;
-        this.logger.log(`Loaded cursor: ${this.cursor}`);
-      }
-    } catch (err) {
-      this.logger.warn(`Failed to load cursor: ${err}`);
-    }
-  }
-
-  private async saveCursor() {
-    try {
-      if (this.cursor) {
-        await this.cacheService.set(
-          this.CURSOR_KEY,
-          this.cursor,
-          this.CURSOR_TTL_SECONDS,
-        );
-      }
-    } catch (err) {
-      this.logger.error(`Failed to save cursor: ${err}`);
-    }
-  }
-
   onApplicationShutdown() {
-    this.stopPolling();
     this.flushBatch();
     this.logger.log('ScannerService shutdown complete');
   }

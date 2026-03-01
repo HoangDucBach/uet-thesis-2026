@@ -95,7 +95,7 @@ export class KeeperService implements OnModuleInit {
       ]);
 
       // Schedule close_commits and trigger_fallback timers
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+
       this.lifecycle.scheduleBatch(result);
     } catch (error) {
       const errorMessage =
