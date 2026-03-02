@@ -1,6 +1,8 @@
 use anyhow::Result;
+use base64::Engine;
 use redis::aio::ConnectionManager;
 use redis::Client;
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -11,6 +13,16 @@ mod cow_event {
 }
 
 use cow_event::{event_stream_server::{EventStream, EventStreamServer}, CowEvent, Empty};
+
+#[derive(Deserialize)]
+struct RedisEvent {
+    package_id: String,
+    module_name: String,
+    event_name: String,
+    tx_digest: String,
+    checkpoint_seq: i64,
+    timestamp_ms: i64,
+}
 
 struct EventStreamService {
     redis_client: Arc<ConnectionManager>,
@@ -65,16 +77,38 @@ async fn stream_events(
                         has_events = true;
                         last_id = msg_id;
 
-                        let data_str = fields
+                        let metadata_str = fields
                             .iter()
-                            .position(|(k, _)| k == "data")
+                            .position(|(k, _)| k == "metadata")
                             .and_then(|idx| fields.get(idx).map(|(_, v)| v));
 
-                        if let Some(payload) = data_str {
-                            match serde_json::from_str::<CowEvent>(payload) {
-                                Ok(event) => {
-                                    if tx.send(Ok(event)).await.is_err() {
-                                        return Ok(());
+                        let contents_bytes = fields
+                            .iter()
+                            .position(|(k, _)| k == "contents")
+                            .and_then(|idx| fields.get(idx).map(|(_, v)| v.clone()));
+
+                        if let (Some(metadata), Some(contents_b64)) = (metadata_str, contents_bytes) {
+                            match serde_json::from_str::<RedisEvent>(metadata) {
+                                Ok(redis_event) => {
+                                    match base64::engine::general_purpose::STANDARD.decode(&contents_b64) {
+                                        Ok(contents) => {
+                                            let grpc_event = CowEvent {
+                                                package_id: redis_event.package_id,
+                                                module_name: redis_event.module_name,
+                                                event_name: redis_event.event_name,
+                                                tx_digest: redis_event.tx_digest,
+                                                checkpoint_seq: redis_event.checkpoint_seq,
+                                                timestamp_ms: redis_event.timestamp_ms,
+                                                contents,
+                                            };
+
+                                            if tx.send(Ok(grpc_event)).await.is_err() {
+                                                return Ok(());
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[gRPC] Base64 decode error: {}", e);
+                                        }
                                     }
                                 }
                                 Err(e) => {

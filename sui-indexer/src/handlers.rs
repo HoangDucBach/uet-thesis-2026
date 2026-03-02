@@ -1,3 +1,4 @@
+use crate::redis_stream::{CowEvent, RedisStreamClient};
 use anyhow::Result;
 use chrono::Utc;
 use std::sync::Arc;
@@ -5,7 +6,6 @@ use sui_indexer_alt_framework::pipeline::Processor;
 use sui_indexer_alt_framework::pipeline::sequential::Handler;
 use sui_indexer_alt_framework::postgres::{Connection, Db};
 use sui_indexer_alt_framework::types::full_checkpoint_content::Checkpoint;
-use crate::redis_stream::{CowEvent, RedisStreamClient};
 
 pub struct EventLogHandler {
     pub redis_client: Arc<RedisStreamClient>,
@@ -50,6 +50,7 @@ impl Processor for EventLogHandler {
                             tx_digest: tx_digest.clone(),
                             checkpoint_seq,
                             timestamp_ms: timestamp,
+                            contents: event.contents.clone(),
                         };
 
                         if let Err(e) = self.redis_client.publish_event(&cow_event).await {
