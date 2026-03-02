@@ -1,4 +1,5 @@
 import { ChainModule } from 'src/chain/chain.module';
+import { EventHandlerRegistry } from 'src/common';
 import { ConfigModule } from 'src/config/config.module';
 import { ContractModule } from 'src/contracts/contract.module';
 import { GrpcModule } from 'src/grpc/grpc.module';
@@ -9,6 +10,11 @@ import { Module } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
 import { CloseCommitsProcessor } from './close-commits.processor';
+import {
+  FallbackTriggeredHandler,
+  SettlementCompleteHandler,
+  WinnerSelectedHandler,
+} from './handlers';
 import { KeeperService } from './keeper.service';
 import { LifecycleService } from './lifecycle.service';
 import { SettlementWatcherService } from './settlement-watcher.service';
@@ -29,12 +35,17 @@ import { TriggerFallbackProcessor } from './trigger-fallback.processor';
     }),
   ],
   providers: [
+    EventHandlerRegistry,
     KeeperService,
     BatchStateService,
     LifecycleService,
     SettlementWatcherService,
     CloseCommitsProcessor,
     TriggerFallbackProcessor,
+    // Event Handlers
+    WinnerSelectedHandler,
+    SettlementCompleteHandler,
+    FallbackTriggeredHandler,
   ],
   exports: [
     KeeperService,

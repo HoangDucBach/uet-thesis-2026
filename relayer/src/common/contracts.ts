@@ -10,8 +10,8 @@ const Address = bcs.fixedArray(32, bcs.u8()).transform({
 });
 
 export const IntentCreatedEvent = bcs.struct('IntentCreatedEvent', {
-  intent_id: bcs.string(),
-  owner: bcs.string(),
+  intent_id: Address,
+  owner: Address,
   sell_type: TypeName,
   buy_type: TypeName,
   sell_amount: bcs.u64(),

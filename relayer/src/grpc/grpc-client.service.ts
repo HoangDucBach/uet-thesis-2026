@@ -11,6 +11,7 @@ export interface CowEvent {
   tx_digest: string;
   checkpoint_seq: number;
   timestamp_ms: number;
+  contents: Buffer;
 }
 
 interface EventStreamService {

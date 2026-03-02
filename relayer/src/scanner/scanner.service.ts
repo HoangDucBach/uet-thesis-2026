@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
+import { EventHandlerRegistry, getEventHandlerMetadata } from 'src/common';
 import { IntentCreatedEventType } from 'src/common/contracts';
-import { INTENT_BOOK } from 'src/contracts';
 import { CowEvent, GrpcClientService } from 'src/grpc';
 
 import {
@@ -9,6 +9,8 @@ import {
   OnApplicationShutdown,
   OnModuleInit,
 } from '@nestjs/common';
+
+import { IntentCreatedHandler } from './handlers';
 
 @Injectable()
 export class ScannerService
@@ -22,32 +24,72 @@ export class ScannerService
   private readonly BATCH_SIZE = 10;
   private readonly BATCH_TIMEOUT_MS = 5000;
 
-  constructor(private grpcClient: GrpcClientService) {
+  constructor(
+    private grpcClient: GrpcClientService,
+    private eventRegistry: EventHandlerRegistry,
+    private intentCreatedHandler: IntentCreatedHandler,
+  ) {
     super();
   }
 
   onModuleInit() {
+    // Register handlers automatically using decorator metadata
+    this.registerHandlers();
+
+    // Listen to cow events and dispatch to registry
     this.grpcClient.onCowEvent((event: CowEvent) => {
-      this.handleCowEvent(event);
+      void this.handleCowEvent(event);
     });
     this.logger.log('Scanner listening to gRPC COW events');
   }
 
-  private handleCowEvent(event: CowEvent) {
-    // Chỉ xử lý IntentCreated events
-    if (
-      event.module_name === INTENT_BOOK.MODULE_NAME &&
-      event.event_name === INTENT_BOOK.EVENTS.INTENT_CREATED
-    ) {
-      this.logger.debug(`Received IntentCreated event: tx=${event.tx_digest}`);
+  /**
+   * Register all handlers that have @EventHandler decorator
+   *
+   * This eliminates the need for if-else chains!
+   * Just add a new handler class with @EventHandler decorator
+   * and it will be automatically registered.
+   */
+  private registerHandlers() {
+    const handlers = [IntentCreatedHandler];
 
-      // Parse event data - trong thực tế cần decode từ event
-      // Tạm thời log để xem structure
-      this.logger.debug(`Event data: ${JSON.stringify(event)}`);
+    for (const HandlerClass of handlers) {
+      const metadata = getEventHandlerMetadata(HandlerClass);
+      if (metadata) {
+        this.eventRegistry.registerHandler(
+          metadata.identifier,
+          HandlerClass,
+          metadata.priority,
+        );
+      }
+    }
 
-      // TODO: Cần parse event.bcs hoặc event data để lấy IntentCreatedEventType
-      // Hiện tại tôi chỉ có metadata, cần full event data từ sidecar
-      // Tạm thời skip việc parse, chỉ log
+    this.logger.log(
+      `Registered ${this.eventRegistry.getRegisteredEvents().length} event handler(s)`,
+    );
+  }
+
+  private async handleCowEvent(event: CowEvent) {
+    try {
+      const results = await this.eventRegistry.handleEvent(event);
+
+      const processed = results.some((r) => r.processed);
+      if (!processed) {
+        this.logger.debug(
+          `Event ${event.module_name}::${event.event_name} not processed by any handler`,
+        );
+        return;
+      }
+
+      for (const result of results) {
+        if (result.processed && result.data) {
+          this.addToBuffer(result.data as IntentCreatedEventType);
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error handling event ${event.module_name}::${event.event_name}: ${(error as Error).message}`,
+      );
     }
   }
 

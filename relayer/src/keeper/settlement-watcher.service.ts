@@ -1,19 +1,15 @@
-import { SETTLEMENT } from 'src/contracts/constants';
+import { EventHandlerRegistry, getEventHandlerMetadata } from 'src/common';
 import { CowEvent, GrpcClientService } from 'src/grpc';
 
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
+import {
+  FallbackTriggeredHandler,
+  SettlementCompleteHandler,
+  WinnerSelectedHandler,
+} from './handlers';
 
-/**
- * Lắng nghe các settlement events từ gRPC stream và cập nhật batch state.
- *
- * | Event                  | BatchStatus transition         |
- * |------------------------|-------------------------------|
- * | WinnerSelectedEvent    | opened / committed → executing |
- * | SettlementCompleteEvent| executing → settled            |
- * | FallbackTriggeredEvent | any → failed                   |
- */
 @Injectable()
 export class SettlementWatcherService implements OnModuleInit {
   private readonly logger = new Logger(SettlementWatcherService.name);
@@ -21,56 +17,68 @@ export class SettlementWatcherService implements OnModuleInit {
   constructor(
     private readonly grpcClient: GrpcClientService,
     private readonly batchState: BatchStateService,
+    private readonly eventRegistry: EventHandlerRegistry,
+    private readonly winnerSelectedHandler: WinnerSelectedHandler,
+    private readonly settlementCompleteHandler: SettlementCompleteHandler,
+    private readonly fallbackTriggeredHandler: FallbackTriggeredHandler,
   ) {}
 
   onModuleInit() {
+    // Register all settlement event handlers
+    this.registerHandlers();
+
+    // Listen to cow events and dispatch to registry
     this.grpcClient.onCowEvent((event: CowEvent) => {
-      try {
-        this.handleSettlementEvent(event);
-      } catch (err) {
-        this.logger.error(`Error handling settlement event: ${err}`);
-      }
+      void this.handleSettlementEvent(event);
     });
     this.logger.log('SettlementWatcher listening to gRPC COW events');
   }
 
-  private handleSettlementEvent(event: CowEvent) {
-    if (event.module_name !== SETTLEMENT.MODULE_NAME) {
-      return;
+  /**
+   * Register handlers automatically using decorator metadata
+   *
+   * Just add a new handler class with @EventHandler and it's auto-registered!
+   */
+  private registerHandlers() {
+    const handlers = [
+      WinnerSelectedHandler,
+      SettlementCompleteHandler,
+      FallbackTriggeredHandler,
+    ];
+
+    for (const HandlerClass of handlers) {
+      const metadata = getEventHandlerMetadata(HandlerClass);
+      if (metadata) {
+        this.eventRegistry.registerHandler(
+          metadata.identifier,
+          HandlerClass,
+          metadata.priority,
+        );
+      }
     }
 
-    switch (event.event_name) {
-      case SETTLEMENT.EVENTS.WINNER_SELECTED:
-        this.handleWinnerSelected(event);
-        break;
-      case SETTLEMENT.EVENTS.SETTLEMENT_COMPLETE:
-        this.handleSettlementComplete(event);
-        break;
-      case SETTLEMENT.EVENTS.FALLBACK_TRIGGERED:
-        this.handleFallbackTriggered(event);
-        break;
-      default:
-        // Ignore other events
-        break;
+    this.logger.log(
+      `Registered ${handlers.length} settlement event handler(s)`,
+    );
+  }
+
+  /**
+   * Handle settlement events using Strategy Pattern
+   */
+  private async handleSettlementEvent(event: CowEvent) {
+    try {
+      const results = await this.eventRegistry.handleEvent(event);
+
+      const processed = results.some((r) => r.processed);
+      if (processed) {
+        this.logger.debug(
+          `Settlement event ${event.event_name} processed successfully`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `Error handling settlement event ${event.module_name}::${event.event_name}: ${err}`,
+      );
     }
-  }
-
-  private handleWinnerSelected(event: CowEvent) {
-    this.logger.debug(`WinnerSelectedEvent: tx=${event.tx_digest}`);
-    // TODO: Parse event data để lấy batch_id
-    // Tạm thời log để debug
-    this.logger.debug(`Event: ${JSON.stringify(event)}`);
-  }
-
-  private handleSettlementComplete(event: CowEvent) {
-    this.logger.debug(`SettlementCompleteEvent: tx=${event.tx_digest}`);
-    // TODO: Parse event data để lấy batch_id
-    this.logger.debug(`Event: ${JSON.stringify(event)}`);
-  }
-
-  private handleFallbackTriggered(event: CowEvent) {
-    this.logger.debug(`FallbackTriggeredEvent: tx=${event.tx_digest}`);
-    // TODO: Parse event data để lấy batch_id
-    this.logger.debug(`Event: ${JSON.stringify(event)}`);
   }
 }
