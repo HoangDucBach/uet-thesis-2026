@@ -63,10 +63,7 @@ export class EventHandlerRegistry {
     }
   }
 
-  async handleEvent(
-    event: CowEvent,
-    parsedData?: any,
-  ): Promise<EventHandlerResult[]> {
+  async handleEvent(event: CowEvent): Promise<EventHandlerResult[]> {
     const key = this.getEventKey({
       moduleName: event.module_name,
       eventName: event.event_name,
@@ -84,7 +81,7 @@ export class EventHandlerRegistry {
     );
 
     const results = await Promise.allSettled(
-      handlerEntries.map(({ handler }) => handler.handle(event, parsedData)),
+      handlerEntries.map(({ handler }) => handler.handle(event)),
     );
 
     return results.map((result, index) => {

@@ -35,7 +35,7 @@ export class TriggerFallbackProcessor
 
   onModuleInit() {
     this.executor = new SerialTransactionExecutor({
-      client: this.chainService.getClient(),
+      client: this.chainService.getJsonRpcClient(),
       signer: this.chainService.getKeypair(),
     });
     this.logger.log('SerialTransactionExecutor initialized');

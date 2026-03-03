@@ -142,7 +142,7 @@ export class KeeperService implements OnModuleInit {
 
   private async openBatchExecutor(intentIds: string[], onChainBatchId: bigint) {
     const executor = new SerialTransactionExecutor({
-      client: this.chainService.getClient(),
+      client: this.chainService.getJsonRpcClient(),
       signer: this.chainService.getKeypair(),
     });
 

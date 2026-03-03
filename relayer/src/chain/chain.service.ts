@@ -1,5 +1,6 @@
 import { SuiGraphQLClient } from '@mysten/sui/graphql';
 import { graphql } from '@mysten/sui/graphql/schema';
+import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
@@ -9,6 +10,7 @@ import { RelayConfigService } from '../config/relay-config.service';
 export class ChainService implements OnModuleInit {
   private readonly logger = new Logger(ChainService.name);
   private graphqlClient: SuiGraphQLClient | null = null;
+  private jsonRpcClient: SuiJsonRpcClient | null = null;
   private keypair: Ed25519Keypair | null = null;
 
   constructor(private readonly config: RelayConfigService) {}
@@ -31,6 +33,13 @@ export class ChainService implements OnModuleInit {
         network,
       });
 
+      const rpcUrl = getJsonRpcFullnodeUrl(network);
+
+      this.jsonRpcClient = new SuiJsonRpcClient({
+        url: rpcUrl,
+        network,
+      });
+
       this.logger.log(`Connected to Sui ${network} network`);
     } catch (error) {
       this.logger.error('Failed to initialize chain service', error);
@@ -48,6 +57,20 @@ export class ChainService implements OnModuleInit {
   }
 
   public getClient(): SuiGraphQLClient {
+    if (!this.graphqlClient) {
+      throw new Error('GraphQL client not initialized');
+    }
+    return this.graphqlClient;
+  }
+
+  public getJsonRpcClient(): SuiJsonRpcClient {
+    if (!this.jsonRpcClient) {
+      throw new Error('JSON RPC client not initialized');
+    }
+    return this.jsonRpcClient;
+  }
+
+  public getGraphqlClient(): SuiGraphQLClient {
     if (!this.graphqlClient) {
       throw new Error('GraphQL client not initialized');
     }
