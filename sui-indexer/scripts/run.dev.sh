@@ -4,7 +4,7 @@ set -e
 
 source .env
 
-PGPASSWORD=relayer psql -h 54.81.114.69 -U relayer -d sui_indexer -c "
+PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
 TRUNCATE TABLE transaction_digests;
 TRUNCATE TABLE watermarks;
 " 2>/dev/null || true

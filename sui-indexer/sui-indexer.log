@@ -1,0 +1,38 @@
+[2026-03-03 20:17:42] === Sui Indexer Production Start ===
+[2026-03-03 20:17:42] Binaries OK
+[2026-03-03 20:17:42] Resetting database...
+[2026-03-03 20:17:43] ERROR: Database reset failed
+[2026-03-03 20:24:44] === Sui Indexer Production Start ===
+[2026-03-03 20:24:44] Binaries OK
+[2026-03-03 20:24:44] Resetting database...
+[2026-03-03 20:24:46] Database reset OK
+[2026-03-03 20:24:46] Fetching latest checkpoint from Sui testnet...
+[2026-03-03 20:24:46] Latest checkpoint: 303746489
+[2026-03-03 20:24:46] Starting sidecar (port 50051)...
+[2026-03-03 20:24:46] Sidecar PID: 73756
+[2026-03-03 20:24:47] Sidecar OK
+[2026-03-03 20:24:47] Starting indexer (checkpoint: 303746489)...
+[gRPC] Connected to Redis
+[gRPC] Server listening on 0.0.0.0:50051
+Error: transport error
+
+Caused by:
+    0: error creating server listener: Address already in use (os error 48)
+    1: Address already in use (os error 48)
+[Redis] Connected to Redis Stream successfully
+[2026-03-03 20:26:31] === Sui Indexer Production Start ===
+[2026-03-03 20:26:31] Binaries OK
+[2026-03-03 20:26:31] Resetting database...
+[2026-03-03 20:26:32] Database reset OK
+[2026-03-03 20:26:32] Fetching latest checkpoint from Sui testnet...
+[2026-03-03 20:26:33] Latest checkpoint: 303746956
+[2026-03-03 20:26:33] Starting sidecar (port 50051)...
+[2026-03-03 20:26:33] Sidecar PID: 75735
+[gRPC] Connected to Redis
+[gRPC] Server listening on 0.0.0.0:50051
+Error: transport error
+
+Caused by:
+    0: error creating server listener: Address already in use (os error 48)
+    1: Address already in use (os error 48)
+[2026-03-03 20:26:34] ERROR: Sidecar failed to start
