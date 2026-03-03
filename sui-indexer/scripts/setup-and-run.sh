@@ -15,11 +15,6 @@ if [ -z "$LATEST_CHECKPOINT" ]; then
     exit 1
 fi
 
-sed -i '' '/^FIRST_CHECKPOINT=/d' .env
-echo "FIRST_CHECKPOINT=$LATEST_CHECKPOINT" >> .env
-
-sed -i '' '/^LAST_CHECKPOINT=/d' .env
-
 # Start sidecar in background
 cargo run --bin sidecar &
 SIDECAR_PID=$!
