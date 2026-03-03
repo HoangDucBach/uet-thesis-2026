@@ -10,6 +10,8 @@ use sui::event::emit;
 const EDeadlineInPast: u64 = 0;
 const ENotIntentOwner: u64 = 1;
 const EIntentInBatch: u64 = 2;
+const ENotPartialFillable: u64 = 3;
+const EFillExceedsRemaining: u64 = 4;
 
 // === Events ===
 
@@ -21,6 +23,7 @@ public struct IntentCreatedEvent has copy, drop {
     buy_type: TypeName,
     sell_amount: u64,
     min_amount_out: u64,
+    partial_fillable: bool,
     deadline: u64,
 }
 
@@ -38,8 +41,7 @@ public struct IntentCancelledEvent has copy, drop {
 /// * `id`: Shared object ID.
 /// * `batch_id`: Optional — set when assigned to a batch.
 /// * `owner`: User address.
-/// * `sell_balance`: Locked coins of type SellCoin.
-/// * `sell_amount`: Amount to sell.
+/// * `sell_balance`: Locked coins of type SellCoin (its value IS the sell amount).
 /// * `min_amount_out`: User's minimum acceptable output.
 /// * `deadline`: Unix milliseconds — intent expires after this.
 public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
@@ -47,18 +49,10 @@ public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
     batch_id: Option<u64>,
     owner: address,
     sell_balance: Balance<SellCoin>,
-    sell_amount: u64,
     min_amount_out: u64,
+    partial_fillable: bool,
+    filled_amount: u64,
     deadline: u64,
-}
-
-/// Owned capability — user holds this to prove ownership and cancel intent.
-///
-/// * `id`: Capability ID.
-/// * `intent_id`: ID of the Intent this cap controls.
-public struct IntentCap has key, store {
-    id: UID,
-    intent_id: ID,
 }
 
 // === Functions ===
@@ -77,15 +71,16 @@ public struct IntentCap has key, store {
 public fun create_intent<SellCoin, BuyCoin>(
     coin: Coin<SellCoin>,
     min_amount_out: u64,
+    partial_fillable: bool,
     deadline: u64,
     clock: &Clock,
     ctx: &mut TxContext,
-): IntentCap {
+) {
     let current_time_ms = clock.timestamp_ms();
     assert!(deadline > current_time_ms, EDeadlineInPast);
 
-    let sell_amount = coin::value(&coin);
     let owner = ctx.sender();
+    let sell_amount = coin::value(&coin); // captured before balance conversion, used in event
     let sell_balance = coin::into_balance(coin);
 
     let intent = Intent<SellCoin, BuyCoin> {
@@ -93,18 +88,14 @@ public fun create_intent<SellCoin, BuyCoin>(
         batch_id: std::option::none(),
         owner,
         sell_balance,
-        sell_amount,
         min_amount_out,
+        partial_fillable,
+        filled_amount: 0,
         deadline,
     };
 
     let intent_id = object::id(&intent);
-    let cap = IntentCap {
-        id: object::new(ctx),
-        intent_id,
-    };
 
-    // Share the intent object
     transfer::share_object(intent);
 
     emit(IntentCreatedEvent {
@@ -114,10 +105,9 @@ public fun create_intent<SellCoin, BuyCoin>(
         buy_type: type_name::with_defining_ids<BuyCoin>(),
         sell_amount,
         min_amount_out,
+        partial_fillable,
         deadline,
     });
-
-    cap
 }
 
 /// User cancels their intent, retrieving coins.
@@ -130,20 +120,17 @@ public fun create_intent<SellCoin, BuyCoin>(
 /// * `SellCoin`: Coin type user is selling.
 /// * `BuyCoin`: Coin type user wanted to receive.
 public fun cancel_intent<SellCoin, BuyCoin>(
-    cap: IntentCap,
     intent: Intent<SellCoin, BuyCoin>,
     ctx: &mut TxContext,
 ) {
-    let IntentCap { id: cap_id, intent_id } = cap;
-    let Intent<SellCoin, BuyCoin> { id, batch_id, owner, sell_balance, sell_amount, .. } = intent;
-
-    // Cannot cancel if intent is already in a batch
-    assert!(option::is_none(&batch_id), EIntentInBatch);
-
-    object::delete(cap_id);
-    object::delete(id);
+    let sell_amount = balance::value(&intent.sell_balance);
+    let intent_id = object::id(&intent);
+    let Intent<SellCoin, BuyCoin> { id, batch_id, owner, sell_balance, .. } = intent;
 
     assert!(owner == ctx.sender(), ENotIntentOwner);
+    assert!(option::is_none(&batch_id), EIntentInBatch);
+
+    object::delete(id);
 
     // Return coins to user
     transfer::public_transfer(
@@ -159,29 +146,59 @@ public fun cancel_intent<SellCoin, BuyCoin>(
 }
 
 /// Consume intent during settlement.
-/// Intent taken by value and deleted — prevents replay.
-/// Sui linear type system guarantees deletion is irreversible.
 ///
 /// * `intent`: Intent taken by value (deleted atomically).
-/// Returns: (owner address, sell_balance, min_amount_out, sell_amount)
+/// Returns: (owner address, sell_balance, min_amount_out)
+/// Caller derives sell_amount via `balance::value(&sell_balance)`.
 ///
 /// Type Parameters:
 /// * `SellCoin`: Coin type user was selling.
 /// * `BuyCoin`: Coin type user wanted to receive.
 public(package) fun consume_intent<SellCoin, BuyCoin>(
     intent: Intent<SellCoin, BuyCoin>,
-): (address, Balance<SellCoin>, u64, u64) {
+): (address, Balance<SellCoin>, u64) {
     let Intent<SellCoin, BuyCoin> {
         id,
         owner,
         sell_balance,
-        sell_amount,
         min_amount_out,
         ..,
     } = intent;
 
     object::delete(id); // shared object deleted — replay impossible
-    (owner, sell_balance, min_amount_out, sell_amount)
+    (owner, sell_balance, min_amount_out)
+}
+
+/// Partially fill an intent during settlement.
+/// Intent stays alive — NOT deleted. Balance is split, filled_amount updated.
+/// Caller must ensure fill_amount > 0 and intent is partial_fillable.
+///
+/// * `intent`: Mutable reference to the shared Intent.
+/// * `fill_amount`: Amount of SellCoin to fill (must be <= remaining balance).
+/// Returns: (owner address, partial_sell_balance, proportional_min_out)
+///
+/// proportional_min_out = min_amount_out * fill_amount / original_sell_amount
+/// where original_sell_amount = remaining + already_filled (reconstructed).
+public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
+    intent: &mut Intent<SellCoin, BuyCoin>,
+    fill_amount: u64,
+): (address, Balance<SellCoin>, u64) {
+    assert!(intent.partial_fillable, ENotPartialFillable);
+    let remaining = balance::value(&intent.sell_balance);
+    assert!(fill_amount > 0 && fill_amount <= remaining, EFillExceedsRemaining);
+
+    // Reconstruct original sell amount: remaining balance + already filled
+    let original_sell_amount = remaining + intent.filled_amount;
+
+    // proportional_min_out = min_amount_out * fill_amount / original_sell_amount
+    let proportional_min_out =
+        (intent.min_amount_out as u128) * (fill_amount as u128)
+        / (original_sell_amount as u128);
+
+    let partial_balance = balance::split(&mut intent.sell_balance, fill_amount);
+    intent.filled_amount = intent.filled_amount + fill_amount;
+
+    (intent.owner, partial_balance, (proportional_min_out as u64))
 }
 
 // === Getters ===
@@ -191,9 +208,9 @@ public fun owner<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): address
     intent.owner
 }
 
-/// Get sell amount.
+/// Get sell amount (derived from locked balance).
 public fun sell_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
-    intent.sell_amount
+    balance::value(&intent.sell_balance)
 }
 
 /// Get minimum output required (in BuyCoin).
@@ -211,6 +228,16 @@ public fun batch_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): Opti
     intent.batch_id
 }
 
+/// Whether the intent allows partial fills.
+public fun partial_fillable<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): bool {
+    intent.partial_fillable
+}
+
+/// Amount already filled (in SellCoin units).
+public fun filled_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
+    intent.filled_amount
+}
+
 // === Test Helpers ===
 
 #[test_only]
@@ -225,6 +252,7 @@ public fun set_batch_id_for_testing<SellCoin, BuyCoin>(
 public fun create_intent_for_testing<SellCoin, BuyCoin>(
     sell_amount: u64,
     min_amount_out: u64,
+    partial_fillable: bool,
     deadline: u64,
     batch_id: u64,
     ctx: &mut TxContext,
@@ -233,9 +261,10 @@ public fun create_intent_for_testing<SellCoin, BuyCoin>(
         id: object::new(ctx),
         batch_id: std::option::some(batch_id),
         owner: ctx.sender(),
-        sell_balance: balance::zero<SellCoin>(),
-        sell_amount,
+        sell_balance: balance::create_for_testing<SellCoin>(sell_amount),
         min_amount_out,
+        partial_fillable,
+        filled_amount: 0,
         deadline,
     }
 }

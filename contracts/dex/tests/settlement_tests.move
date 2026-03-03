@@ -21,8 +21,7 @@ const ENOT_WINNER: u64 = 3;
 const ESCORE_MISMATCH: u64 = 4;
 const EINVALID_DEADLINE: u64 = 5;
 const EWRONG_BATCH: u64 = 6;
-const ENO_COMMITS: u64 = 7;
-const EDUPLICATE_COMMIT: u64 = 8;
+const EDUPLICATE_COMMIT: u64 = 7;
 
 // ─── Tests: open_batch ─────────────────────────────────────────────────────
 
