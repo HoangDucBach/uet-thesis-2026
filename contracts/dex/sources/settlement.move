@@ -1,6 +1,7 @@
 module cow_dex::settlement;
 
 use cow_dex::config::GlobalConfig;
+use cow_dex::intent_book::{Self, Intent};
 use cow_dex::math;
 use deepbook::pool::Pool as DeepbookPool;
 use sui::balance::{Self, Balance};
@@ -174,7 +175,7 @@ public fun open_batch(
 
     emit(BatchOpenedEvent {
         batch_id,
-        auction_state_id: object::id(&state),
+        auction_state_id: state.id.to_inner(),
         intent_ids,
         commit_end_ms,
         execute_deadline_ms,
@@ -202,25 +203,25 @@ public fun commit(
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     let current_time_ms = clock.timestamp_ms();
     assert!(current_time_ms < state.commit_end_ms, EInvalidDeadline);
-    assert!(coin::value(&bond) >= config.min_bond(), EBondTooSmall);
+    assert!(bond.value() >= config.min_bond(), EBondTooSmall);
 
     let sender = ctx.sender();
-    assert!(!table::contains(&state.commits, sender), EDuplicateCommit);
+    assert!(!state.commits.contains(sender), EDuplicateCommit);
 
     let entry = CommitEntry {
         score,
-        bond: coin::into_balance(bond),
+        bond: bond.into_balance(),
         timestamp: current_time_ms,
     };
-    table::add(&mut state.commits, sender, entry);
+    state.commits.add(sender, entry);
 
     // Update winner on-the-fly (highest score, earliest timestamp for ties)
-    if (option::is_none(&state.winner)) {
+    if (state.winner.is_none()) {
         state.winner = option::some(sender);
         state.winner_score = score;
     } else {
-        let current_winner = *option::borrow(&state.winner);
-        let entry_ref = table::borrow(&state.commits, current_winner);
+        let current_winner = *state.winner.borrow();
+        let entry_ref = state.commits.borrow(current_winner);
         let current_winner_timestamp = entry_ref.timestamp;
 
         if (score > state.winner_score) {
@@ -251,7 +252,7 @@ public fun close_commits(state: &mut AuctionState, clock: &Clock) {
     assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
     assert!(current_time_ms >= state.commit_end_ms, EInvalidDeadline);
 
-    if (option::is_none(&state.winner)) {
+    if (state.winner.is_none()) {
         state.phase = AuctionPhase::Aborted;
         emit(BatchAbortedEvent { batch_id: state.batch_id });
     } else {
@@ -259,7 +260,7 @@ public fun close_commits(state: &mut AuctionState, clock: &Clock) {
 
         emit(WinnerSelectedEvent {
             batch_id: state.batch_id,
-            winner: *option::borrow(&state.winner),
+            winner: *state.winner.borrow(),
             winner_score: state.winner_score,
             runner_up: state.runner_up,
             runner_up_score: state.runner_up_score,
@@ -280,9 +281,9 @@ public fun open_settlement(
     let current_time_ms = clock.timestamp_ms();
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
     assert!(current_time_ms <= state.execute_deadline_ms, EInvalidDeadline);
-    assert!(option::is_some(&state.winner), ENotWinner);
+    assert!(state.winner.is_some(), ENotWinner);
 
-    let winner = *option::borrow(&state.winner);
+    let winner = *state.winner.borrow();
     assert!(winner == ctx.sender(), ENotWinner);
 
     SettlementTicket {
@@ -308,25 +309,23 @@ public fun open_settlement(
 #[allow(lint(self_transfer))]
 public fun process_intent<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
-    intent: cow_dex::intent_book::Intent<SellCoin, BuyCoin>,
+    intent: Intent<SellCoin, BuyCoin>,
     payout: Coin<BuyCoin>,
     pool: &DeepbookPool<SellCoin, BuyCoin>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
     // 1. Verify intent belongs to this batch
-    let intent_batch_id = cow_dex::intent_book::batch_id(&intent);
-    assert!(option::is_some(&intent_batch_id), EWrongBatch);
-    assert!(*option::borrow(&intent_batch_id) == ticket.batch_id, EWrongBatch);
+    let intent_batch_id = intent_book::batch_id(&intent);
+    assert!(intent_batch_id.is_some(), EWrongBatch);
+    assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
     // 2. Consume intent on-chain (deleted — replay impossible by Sui linear types)
-    let (owner, sell_balance, min_amount_out) = cow_dex::intent_book::consume_intent(
-        intent,
-    );
-    let sell_amount = balance::value(&sell_balance);
+    let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
+    let sell_amount = sell_balance.value();
 
-    // 3. Calculate EBBO floor on-chain using DeepBook mid_price
-    let mid_price = deepbook::pool::mid_price(pool, clock);
+    // 3. Calculate reference price floor using DeepBook mid_price
+    let mid_price = pool.mid_price(clock);
 
     // fair_out = sell_amount * mid_price / math::float_scaling() (raw math, no decimals needed)
     let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / math::float_scaling();
@@ -335,45 +334,40 @@ public fun process_intent<SellCoin, BuyCoin>(
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
 
-    // ebbo_floor = max(min_amount_out, fair_out * 99%)
+    // price_floor = max(min_amount_out, fair_out * 99%)
     // Do slippage calculation in u128 to prevent overflow
     let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
     assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
     let slippage_protection = (slippage_u128 as u64);
-    let ebbo_floor = math::max_u64_val(min_amount_out, slippage_protection);
+    let price_floor = math::max_u64_val(min_amount_out, slippage_protection);
 
-    // 4. Verify payout meets floor (solver cannot fake prices)
-    let actual = coin::value(&payout);
-    assert!(actual >= ebbo_floor, EClearingPriceMismatch);
+    // 4. Verify payout meets reference price floor (solver cannot fake prices)
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
 
     // 5. Transfer payout to user (owned object, fast path)
     transfer::public_transfer(payout, owner);
 
     // 6. Return sell coins to solver
-    let sell_coin = coin::from_balance(sell_balance, ctx);
-    transfer::public_transfer(sell_coin, ctx.sender());
+    transfer::public_transfer(sell_balance.into_coin(ctx), ctx.sender());
 
     // 7. Increment actual CoW pair counter
     ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
 }
 
 /// Process a partial fill for a partial_fillable intent.
-/// Intent is mutated (balance reduced) but NOT deleted — it stays on-chain.
-/// Solver specifies fill_amount; proportional EBBO floor is enforced.
-/// Call this multiple times across batches until intent is fully filled,
-/// then call close_filled_intent() to delete the empty intent.
+/// Intent is mutated but NOT deleted — it stays on-chain.
 ///
 /// * `ticket`: SettlementTicket (mutable, increments actual_cow_pairs).
 /// * `intent`: &mut Intent (shared object, stays alive after call).
 /// * `fill_amount`: SellCoin units to fill this round.
 /// * `payout`: Solver's payout of BuyCoin for this partial fill.
-/// * `pool`: DeepBook pool for EBBO price floor.
+/// * `pool`: DeepBook pool for reference price floor.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 #[allow(lint(self_transfer))]
 public fun process_intent_partial<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
-    intent: &mut cow_dex::intent_book::Intent<SellCoin, BuyCoin>,
+    intent: &mut Intent<SellCoin, BuyCoin>,
     fill_amount: u64,
     payout: Coin<BuyCoin>,
     pool: &DeepbookPool<SellCoin, BuyCoin>,
@@ -381,19 +375,18 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     ctx: &mut TxContext,
 ) {
     // 1. Verify intent belongs to this batch
-    let intent_batch_id = cow_dex::intent_book::batch_id(intent);
-    assert!(option::is_some(&intent_batch_id), EWrongBatch);
-    assert!(*option::borrow(&intent_batch_id) == ticket.batch_id, EWrongBatch);
+    let intent_batch_id = intent_book::batch_id(intent);
+    assert!(intent_batch_id.is_some(), EWrongBatch);
+    assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
     // 2. Split fill_amount from intent balance (asserts partial_fillable, fill <= remaining)
-    let (
-        owner,
-        partial_sell_balance,
-        proportional_min_out,
-    ) = cow_dex::intent_book::consume_intent_partial(intent, fill_amount);
+    let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
+        intent,
+        fill_amount,
+    );
 
-    // 3. Calculate proportional EBBO floor using DeepBook mid_price
-    let mid_price = deepbook::pool::mid_price(pool, clock);
+    // 3. Calculate proportional reference price floor using DeepBook mid_price
+    let mid_price = pool.mid_price(clock);
 
     let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / math::float_scaling();
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
@@ -402,17 +395,16 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
     assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
     let slippage_protection = (slippage_u128 as u64);
-    let ebbo_floor = math::max_u64_val(proportional_min_out, slippage_protection);
+    let price_floor = math::max_u64_val(proportional_min_out, slippage_protection);
 
-    // 4. Verify payout meets proportional floor
-    assert!(coin::value(&payout) >= ebbo_floor, EClearingPriceMismatch);
+    // 4. Verify payout meets proportional reference price floor
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
 
     // 5. Transfer payout to user
     transfer::public_transfer(payout, owner);
 
     // 6. Return partial sell coins to solver
-    let sell_coin = coin::from_balance(partial_sell_balance, ctx);
-    transfer::public_transfer(sell_coin, ctx.sender());
+    transfer::public_transfer(partial_sell_balance.into_coin(ctx), ctx.sender());
 
     // 7. Increment counter (counts as 1 CoW pair per partial fill call)
     ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
@@ -442,15 +434,11 @@ public fun close_settlement(
     // Verify actual delivery >= committed score
     assert!(actual_cow_pairs >= committed_score, EScoreMismatch);
 
-    let winner = *option::borrow(&state.winner);
+    let winner = *state.winner.borrow();
 
     // Return winner's bond
-    let entry = table::remove(&mut state.commits, winner);
-    let CommitEntry { bond, score: _, timestamp: _ } = entry;
-    transfer::public_transfer(
-        coin::from_balance(bond, ctx),
-        winner,
-    );
+    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(winner);
+    transfer::public_transfer(bond.into_coin(ctx), winner);
 
     state.phase = AuctionPhase::Done;
 
@@ -474,17 +462,13 @@ public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut T
     let current_time_ms = clock.timestamp_ms();
     assert!(current_time_ms > state.execute_deadline_ms, EInvalidDeadline);
 
-    let winner = *option::borrow(&state.winner);
-    let entry = table::remove(&mut state.commits, winner);
-    let CommitEntry { bond, score: _, timestamp: _ } = entry;
-    let slashed_amount = balance::value(&bond);
+    let winner = *state.winner.borrow();
+    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(winner);
+    let slashed_amount = bond.value();
 
     // Transfer slashed bond to caller (reward for maintaining protocol)
     // In production, this should go to a treasury address
-    transfer::public_transfer(
-        coin::from_balance(bond, ctx),
-        ctx.sender(),
-    );
+    transfer::public_transfer(bond.into_coin(ctx), ctx.sender());
 
     state.phase = AuctionPhase::Failed;
 
@@ -504,15 +488,10 @@ public fun claim_refund(state: &mut AuctionState, ctx: &mut TxContext) {
     assert!(state.phase == AuctionPhase::Done || state.phase == AuctionPhase::Failed, EWrongPhase);
 
     let sender = ctx.sender();
-    assert!(table::contains(&state.commits, sender), ENotWinner);
+    assert!(state.commits.contains(sender), ENotWinner);
 
-    let entry = table::remove(&mut state.commits, sender);
-    let CommitEntry { bond, score: _, timestamp: _ } = entry;
-
-    transfer::public_transfer(
-        coin::from_balance(bond, ctx),
-        sender,
-    );
+    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(sender);
+    transfer::public_transfer(bond.into_coin(ctx), sender);
 }
 
 // === Getters ===
@@ -530,6 +509,10 @@ public fun batch_id(state: &AuctionState): u64 {
 /// Get winning solver address.
 public fun winner(state: &AuctionState): Option<address> {
     state.winner
+}
+
+public fun runner_up(state: &AuctionState): Option<address> {
+    state.runner_up
 }
 
 /// Get winner's committed score.

@@ -393,10 +393,6 @@ fun test_open_settlement_non_winner_aborts() {
     ts::end(scenario);
 }
 
-// ─── Tests: process_intent ─────────────────────────────────────────────────
-// NOTE: Disabled - process_intent now requires real DeepBook pool for on-chain EBBO
-// Tests moved to integration_settlement_tests.move for testnet
-
 // ─── Tests: close_settlement ───────────────────────────────────────────────
 
 #[test]
@@ -617,9 +613,3 @@ fun test_claim_refund_loser_after_done() {
 
     ts::end(scenario);
 }
-
-// ─── Full settlement flow: commit-reveal-execute ────────────────────────────
-
-// NOTE: test_full_settlement_flow disabled - process_intent signature changed
-// Requires real DeepBook pool for on-chain EBBO calculation
-// See integration_settlement_tests.move for testnet version

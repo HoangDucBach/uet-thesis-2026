@@ -1,5 +1,6 @@
 module cow_dex::intent_book;
 
+use std::option;
 use std::type_name::{Self, TypeName};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
@@ -80,12 +81,12 @@ public fun create_intent<SellCoin, BuyCoin>(
     assert!(deadline > current_time_ms, EDeadlineInPast);
 
     let owner = ctx.sender();
-    let sell_amount = coin::value(&coin); // captured before balance conversion, used in event
-    let sell_balance = coin::into_balance(coin);
+    let sell_amount = coin.value(); // captured before balance conversion, used in event
+    let sell_balance = coin.into_balance();
 
     let intent = Intent<SellCoin, BuyCoin> {
         id: object::new(ctx),
-        batch_id: std::option::none(),
+        batch_id: option::none(),
         owner,
         sell_balance,
         min_amount_out,
@@ -94,7 +95,7 @@ public fun create_intent<SellCoin, BuyCoin>(
         deadline,
     };
 
-    let intent_id = object::id(&intent);
+    let intent_id = intent.id.to_inner();
 
     transfer::share_object(intent);
 
@@ -123,20 +124,17 @@ public fun cancel_intent<SellCoin, BuyCoin>(
     intent: Intent<SellCoin, BuyCoin>,
     ctx: &mut TxContext,
 ) {
-    let sell_amount = balance::value(&intent.sell_balance);
-    let intent_id = object::id(&intent);
+    let sell_amount = intent.sell_balance.value();
+    let intent_id = intent.id.to_inner();
     let Intent<SellCoin, BuyCoin> { id, batch_id, owner, sell_balance, .. } = intent;
 
     assert!(owner == ctx.sender(), ENotIntentOwner);
-    assert!(option::is_none(&batch_id), EIntentInBatch);
+    assert!(batch_id.is_none(), EIntentInBatch);
 
     object::delete(id);
 
     // Return coins to user
-    transfer::public_transfer(
-        coin::from_balance(sell_balance, ctx),
-        owner,
-    );
+    transfer::public_transfer(sell_balance.into_coin(ctx), owner);
 
     emit(IntentCancelledEvent {
         intent_id,
@@ -184,7 +182,7 @@ public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
     fill_amount: u64,
 ): (address, Balance<SellCoin>, u64) {
     assert!(intent.partial_fillable, ENotPartialFillable);
-    let remaining = balance::value(&intent.sell_balance);
+    let remaining = intent.sell_balance.value();
     assert!(fill_amount > 0 && fill_amount <= remaining, EFillExceedsRemaining);
 
     // Reconstruct original sell amount: remaining balance + already filled
@@ -195,7 +193,7 @@ public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
         (intent.min_amount_out as u128) * (fill_amount as u128)
         / (original_sell_amount as u128);
 
-    let partial_balance = balance::split(&mut intent.sell_balance, fill_amount);
+    let partial_balance = intent.sell_balance.split(fill_amount);
     intent.filled_amount = intent.filled_amount + fill_amount;
 
     (intent.owner, partial_balance, (proportional_min_out as u64))
@@ -210,7 +208,7 @@ public fun owner<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): address
 
 /// Get sell amount (derived from locked balance).
 public fun sell_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
-    balance::value(&intent.sell_balance)
+    intent.sell_balance.value()
 }
 
 /// Get minimum output required (in BuyCoin).
@@ -245,7 +243,7 @@ public fun set_batch_id_for_testing<SellCoin, BuyCoin>(
     intent: &mut Intent<SellCoin, BuyCoin>,
     batch_id: u64,
 ) {
-    intent.batch_id = std::option::some(batch_id);
+    intent.batch_id = option::some(batch_id);
 }
 
 #[test_only]
@@ -259,7 +257,7 @@ public fun create_intent_for_testing<SellCoin, BuyCoin>(
 ): Intent<SellCoin, BuyCoin> {
     Intent<SellCoin, BuyCoin> {
         id: object::new(ctx),
-        batch_id: std::option::some(batch_id),
+        batch_id: option::some(batch_id),
         owner: ctx.sender(),
         sell_balance: balance::create_for_testing<SellCoin>(sell_amount),
         min_amount_out,
@@ -271,5 +269,5 @@ public fun create_intent_for_testing<SellCoin, BuyCoin>(
 
 #[test_only]
 public fun intent_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): ID {
-    object::id(intent)
+    intent.id.to_inner()
 }
