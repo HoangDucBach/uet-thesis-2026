@@ -1,0 +1,181 @@
+{
+  "id": {
+    "address": "cow_dex",
+    "name": "metrics"
+  },
+  "doc": null,
+  "immediate_dependencies": [
+    {
+      "address": "sui",
+      "name": "event"
+    }
+  ],
+  "attributes": [],
+  "functions": {
+    "emit_settlement_event": {
+      "source_index": 0,
+      "index": 0,
+      "doc": " Emits a SettlementEvent after successful settlement.\n * `batch_id`: Batch sequence number.\n * `n_intents`: Total intents in batch.\n * `n_cow_pairs`: Number of CoW pairs.\n * `cow_rate_bps`: CoW rate.\n * `total_surplus_sui`: Total surplus in SUI.\n * `flash_amount`: Flash loan amount.\n * `flash_fee`: Flash fee.\n * `gas_used`: Gas used in settlement.\n * `solver`: Winning solver address.\n * `winning_score`: Winning solution score.\n * `runner_up_score`: Runner-up score.\n * `n_solvers_committed`: Number of commits.\n * `n_solvers_revealed`: Number of reveals.\n * `n_shared_obj_writes`: Shared object writes count.\n * `timestamp_ms`: Settlement timestamp.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [],
+      "parameters": [
+        {
+          "name": "batch_id",
+          "type_": "u64"
+        },
+        {
+          "name": "n_intents",
+          "type_": "u64"
+        },
+        {
+          "name": "n_cow_pairs",
+          "type_": "u64"
+        },
+        {
+          "name": "cow_rate_bps",
+          "type_": "u64"
+        },
+        {
+          "name": "total_surplus_sui",
+          "type_": "u64"
+        },
+        {
+          "name": "flash_amount",
+          "type_": "u64"
+        },
+        {
+          "name": "flash_fee",
+          "type_": "u64"
+        },
+        {
+          "name": "gas_used",
+          "type_": "u64"
+        },
+        {
+          "name": "solver",
+          "type_": "address"
+        },
+        {
+          "name": "winning_score",
+          "type_": "u64"
+        },
+        {
+          "name": "runner_up_score",
+          "type_": "u64"
+        },
+        {
+          "name": "n_solvers_committed",
+          "type_": "u64"
+        },
+        {
+          "name": "n_solvers_revealed",
+          "type_": "u64"
+        },
+        {
+          "name": "n_shared_obj_writes",
+          "type_": "u64"
+        },
+        {
+          "name": "timestamp_ms",
+          "type_": "u64"
+        }
+      ],
+      "return_": []
+    }
+  },
+  "structs": {
+    "SettlementEvent": {
+      "index": 0,
+      "doc": " Settlement event emitted after successful settlement.\n Contains all benchmark data required for    .\n * `batch_id`: Batch sequence number.\n * `n_intents`: Total number of intents in the batch.\n * `n_cow_pairs`: Number of intents matched via CoW.\n * `cow_rate_bps`: CoW rate in bps.\n * `total_surplus_sui`: Total surplus generated in SUI (scaled).\n * `flash_amount`: Total flash loan amount.\n * `flash_fee`: Flash fee charged (estimated).\n * `gas_used`: Total gas used in settlement.\n * `solver`: Address of the winning solver.\n * `winning_score`: Surplus score of winning solution.\n * `runner_up_score`: Surplus score of second-best solution (0 if none).\n * `n_solvers_committed`: Number of solvers who committed.\n * `n_solvers_revealed`: Number of solvers who revealed.\n * `n_shared_obj_writes`: Estimated shared object writes.\n * `timestamp_ms`: Unix milliseconds when settlement completed.",
+      "attributes": [],
+      "abilities": [
+        "Copy",
+        "Drop"
+      ],
+      "type_parameters": [],
+      "fields": {
+        "positional_fields": false,
+        "fields": {
+          "batch_id": {
+            "index": 0,
+            "doc": null,
+            "type_": "u64"
+          },
+          "n_intents": {
+            "index": 1,
+            "doc": null,
+            "type_": "u64"
+          },
+          "n_cow_pairs": {
+            "index": 2,
+            "doc": null,
+            "type_": "u64"
+          },
+          "cow_rate_bps": {
+            "index": 3,
+            "doc": null,
+            "type_": "u64"
+          },
+          "total_surplus_sui": {
+            "index": 4,
+            "doc": null,
+            "type_": "u64"
+          },
+          "flash_amount": {
+            "index": 5,
+            "doc": null,
+            "type_": "u64"
+          },
+          "flash_fee": {
+            "index": 6,
+            "doc": null,
+            "type_": "u64"
+          },
+          "gas_used": {
+            "index": 7,
+            "doc": null,
+            "type_": "u64"
+          },
+          "solver": {
+            "index": 8,
+            "doc": null,
+            "type_": "address"
+          },
+          "winning_score": {
+            "index": 9,
+            "doc": null,
+            "type_": "u64"
+          },
+          "runner_up_score": {
+            "index": 10,
+            "doc": null,
+            "type_": "u64"
+          },
+          "n_solvers_committed": {
+            "index": 11,
+            "doc": null,
+            "type_": "u64"
+          },
+          "n_solvers_revealed": {
+            "index": 12,
+            "doc": null,
+            "type_": "u64"
+          },
+          "n_shared_obj_writes": {
+            "index": 13,
+            "doc": null,
+            "type_": "u64"
+          },
+          "timestamp_ms": {
+            "index": 14,
+            "doc": null,
+            "type_": "u64"
+          }
+        }
+      }
+    }
+  },
+  "enums": {}
+}

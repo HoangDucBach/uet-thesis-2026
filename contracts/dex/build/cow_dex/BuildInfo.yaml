@@ -3,7 +3,7 @@ compiled_package_info:
   package_name: cow_dex
   build_flags:
     test_mode: false
-    generate_docs: true
+    generate_docs: false
     save_disassembly: false
     install_dir: ~
     force_recompilation: false

@@ -1,0 +1,965 @@
+{
+  "id": {
+    "address": "cow_dex",
+    "name": "intent_book"
+  },
+  "doc": null,
+  "immediate_dependencies": [
+    {
+      "address": "std",
+      "name": "option"
+    },
+    {
+      "address": "std",
+      "name": "type_name"
+    },
+    {
+      "address": "sui",
+      "name": "balance"
+    },
+    {
+      "address": "sui",
+      "name": "clock"
+    },
+    {
+      "address": "sui",
+      "name": "coin"
+    },
+    {
+      "address": "sui",
+      "name": "event"
+    },
+    {
+      "address": "sui",
+      "name": "object"
+    },
+    {
+      "address": "sui",
+      "name": "transfer"
+    },
+    {
+      "address": "sui",
+      "name": "tx_context"
+    }
+  ],
+  "attributes": [],
+  "functions": {
+    "create_intent": {
+      "source_index": 0,
+      "index": 0,
+      "doc": " User creates a new intent, locking coins in a shared object.\n\n * `coin`: User's coin to trade (type SellCoin).\n * `min_amount_out`: Minimum acceptable output (in BuyCoin).\n * `deadline`: Unix milliseconds deadline.\n * `clock`: Sui clock for deadline validation.\n * `ctx`: Transaction context.\n\n Type Parameters:\n * `SellCoin`: Coin type user is selling.\n * `BuyCoin`: Coin type user wants to receive.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "coin",
+          "type_": {
+            "Datatype": {
+              "module": {
+                "address": "sui",
+                "name": "coin"
+              },
+              "name": "Coin",
+              "type_arguments": [
+                {
+                  "phantom": true,
+                  "argument": {
+                    "NamedTypeParameter": "SellCoin"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "min_amount_out",
+          "type_": "u64"
+        },
+        {
+          "name": "partial_fillable",
+          "type_": "bool"
+        },
+        {
+          "name": "deadline",
+          "type_": "u64"
+        },
+        {
+          "name": "clock",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "sui",
+                    "name": "clock"
+                  },
+                  "name": "Clock",
+                  "type_arguments": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "ctx",
+          "type_": {
+            "Reference": [
+              true,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "sui",
+                    "name": "tx_context"
+                  },
+                  "name": "TxContext",
+                  "type_arguments": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": []
+    },
+    "cancel_intent": {
+      "source_index": 1,
+      "index": 1,
+      "doc": " User cancels their intent, retrieving coins.\n\n * `cap`: IntentCap.\n * `intent`: Intent object.\n * `ctx`: Transaction context.\n\n Type Parameters:\n * `SellCoin`: Coin type user is selling.\n * `BuyCoin`: Coin type user wanted to receive.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Datatype": {
+              "module": {
+                "address": "cow_dex",
+                "name": "intent_book"
+              },
+              "name": "Intent",
+              "type_arguments": [
+                {
+                  "phantom": true,
+                  "argument": {
+                    "NamedTypeParameter": "SellCoin"
+                  }
+                },
+                {
+                  "phantom": true,
+                  "argument": {
+                    "NamedTypeParameter": "BuyCoin"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ctx",
+          "type_": {
+            "Reference": [
+              true,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "sui",
+                    "name": "tx_context"
+                  },
+                  "name": "TxContext",
+                  "type_arguments": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": []
+    },
+    "consume_intent": {
+      "source_index": 2,
+      "index": 2,
+      "doc": " Consume intent during settlement.\n\n * `intent`: Intent taken by value (deleted atomically).\n Returns: (owner address, sell_balance, min_amount_out)\n Caller derives sell_amount via `balance::value(&sell_balance)`.\n\n Type Parameters:\n * `SellCoin`: Coin type user was selling.\n * `BuyCoin`: Coin type user wanted to receive.",
+      "attributes": [],
+      "visibility": "Package",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Datatype": {
+              "module": {
+                "address": "cow_dex",
+                "name": "intent_book"
+              },
+              "name": "Intent",
+              "type_arguments": [
+                {
+                  "phantom": true,
+                  "argument": {
+                    "NamedTypeParameter": "SellCoin"
+                  }
+                },
+                {
+                  "phantom": true,
+                  "argument": {
+                    "NamedTypeParameter": "BuyCoin"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "return_": [
+        "address",
+        {
+          "Datatype": {
+            "module": {
+              "address": "sui",
+              "name": "balance"
+            },
+            "name": "Balance",
+            "type_arguments": [
+              {
+                "phantom": true,
+                "argument": {
+                  "NamedTypeParameter": "SellCoin"
+                }
+              }
+            ]
+          }
+        },
+        "u64"
+      ]
+    },
+    "consume_intent_partial": {
+      "source_index": 3,
+      "index": 3,
+      "doc": " Partially fill an intent during settlement.\n Intent stays alive — NOT deleted. Balance is split, filled_amount updated.\n Caller must ensure fill_amount > 0 and intent is partial_fillable.\n\n * `intent`: Mutable reference to the shared Intent.\n * `fill_amount`: Amount of SellCoin to fill (must be <= remaining balance).\n Returns: (owner address, partial_sell_balance, proportional_min_out)\n\n proportional_min_out = min_amount_out * fill_amount / original_sell_amount\n where original_sell_amount = remaining + already_filled (reconstructed).",
+      "attributes": [],
+      "visibility": "Package",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              true,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "fill_amount",
+          "type_": "u64"
+        }
+      ],
+      "return_": [
+        "address",
+        {
+          "Datatype": {
+            "module": {
+              "address": "sui",
+              "name": "balance"
+            },
+            "name": "Balance",
+            "type_arguments": [
+              {
+                "phantom": true,
+                "argument": {
+                  "NamedTypeParameter": "SellCoin"
+                }
+              }
+            ]
+          }
+        },
+        "u64"
+      ]
+    },
+    "owner": {
+      "source_index": 4,
+      "index": 4,
+      "doc": " Get intent owner.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "address"
+      ]
+    },
+    "sell_amount": {
+      "source_index": 5,
+      "index": 5,
+      "doc": " Get sell amount (derived from locked balance).",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "u64"
+      ]
+    },
+    "min_amount_out": {
+      "source_index": 6,
+      "index": 6,
+      "doc": " Get minimum output required (in BuyCoin).",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "u64"
+      ]
+    },
+    "deadline": {
+      "source_index": 7,
+      "index": 7,
+      "doc": " Get deadline in milliseconds.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "u64"
+      ]
+    },
+    "batch_id": {
+      "source_index": 8,
+      "index": 8,
+      "doc": " Get batch ID if assigned.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        {
+          "Datatype": {
+            "module": {
+              "address": "std",
+              "name": "option"
+            },
+            "name": "Option",
+            "type_arguments": [
+              {
+                "phantom": false,
+                "argument": "u64"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "partial_fillable": {
+      "source_index": 9,
+      "index": 9,
+      "doc": " Whether the intent allows partial fills.",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "bool"
+      ]
+    },
+    "filled_amount": {
+      "source_index": 10,
+      "index": 10,
+      "doc": " Amount already filled (in SellCoin units).",
+      "attributes": [],
+      "visibility": "Public",
+      "entry": false,
+      "type_parameters": [
+        {
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "parameters": [
+        {
+          "name": "intent",
+          "type_": {
+            "Reference": [
+              false,
+              {
+                "Datatype": {
+                  "module": {
+                    "address": "cow_dex",
+                    "name": "intent_book"
+                  },
+                  "name": "Intent",
+                  "type_arguments": [
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "SellCoin"
+                      }
+                    },
+                    {
+                      "phantom": true,
+                      "argument": {
+                        "NamedTypeParameter": "BuyCoin"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return_": [
+        "u64"
+      ]
+    }
+  },
+  "structs": {
+    "IntentCreatedEvent": {
+      "index": 0,
+      "doc": " Emitted when user creates a new intent.",
+      "attributes": [],
+      "abilities": [
+        "Copy",
+        "Drop"
+      ],
+      "type_parameters": [],
+      "fields": {
+        "positional_fields": false,
+        "fields": {
+          "intent_id": {
+            "index": 0,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "sui",
+                  "name": "object"
+                },
+                "name": "ID",
+                "type_arguments": []
+              }
+            }
+          },
+          "owner": {
+            "index": 1,
+            "doc": null,
+            "type_": "address"
+          },
+          "sell_type": {
+            "index": 2,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "std",
+                  "name": "type_name"
+                },
+                "name": "TypeName",
+                "type_arguments": []
+              }
+            }
+          },
+          "buy_type": {
+            "index": 3,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "std",
+                  "name": "type_name"
+                },
+                "name": "TypeName",
+                "type_arguments": []
+              }
+            }
+          },
+          "sell_amount": {
+            "index": 4,
+            "doc": null,
+            "type_": "u64"
+          },
+          "min_amount_out": {
+            "index": 5,
+            "doc": null,
+            "type_": "u64"
+          },
+          "partial_fillable": {
+            "index": 6,
+            "doc": null,
+            "type_": "bool"
+          },
+          "deadline": {
+            "index": 7,
+            "doc": null,
+            "type_": "u64"
+          }
+        }
+      }
+    },
+    "IntentCancelledEvent": {
+      "index": 1,
+      "doc": " Emitted when user cancels an intent.",
+      "attributes": [],
+      "abilities": [
+        "Copy",
+        "Drop"
+      ],
+      "type_parameters": [],
+      "fields": {
+        "positional_fields": false,
+        "fields": {
+          "intent_id": {
+            "index": 0,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "sui",
+                  "name": "object"
+                },
+                "name": "ID",
+                "type_arguments": []
+              }
+            }
+          },
+          "owner": {
+            "index": 1,
+            "doc": null,
+            "type_": "address"
+          },
+          "sell_amount": {
+            "index": 2,
+            "doc": null,
+            "type_": "u64"
+          }
+        }
+      }
+    },
+    "Intent": {
+      "index": 2,
+      "doc": " Shared object — user's coins locked inside until settlement or cancellation.\n\n * `id`: Shared object ID.\n * `batch_id`: Optional — set when assigned to a batch.\n * `owner`: User address.\n * `sell_balance`: Locked coins of type SellCoin (its value IS the sell amount).\n * `min_amount_out`: User's minimum acceptable output.\n * `deadline`: Unix milliseconds — intent expires after this.",
+      "attributes": [],
+      "abilities": [
+        "Key"
+      ],
+      "type_parameters": [
+        {
+          "phantom": true,
+          "name": "SellCoin",
+          "constraints": []
+        },
+        {
+          "phantom": true,
+          "name": "BuyCoin",
+          "constraints": []
+        }
+      ],
+      "fields": {
+        "positional_fields": false,
+        "fields": {
+          "id": {
+            "index": 0,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "sui",
+                  "name": "object"
+                },
+                "name": "UID",
+                "type_arguments": []
+              }
+            }
+          },
+          "batch_id": {
+            "index": 1,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "std",
+                  "name": "option"
+                },
+                "name": "Option",
+                "type_arguments": [
+                  {
+                    "phantom": false,
+                    "argument": "u64"
+                  }
+                ]
+              }
+            }
+          },
+          "owner": {
+            "index": 2,
+            "doc": null,
+            "type_": "address"
+          },
+          "sell_balance": {
+            "index": 3,
+            "doc": null,
+            "type_": {
+              "Datatype": {
+                "module": {
+                  "address": "sui",
+                  "name": "balance"
+                },
+                "name": "Balance",
+                "type_arguments": [
+                  {
+                    "phantom": true,
+                    "argument": {
+                      "NamedTypeParameter": "SellCoin"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "min_amount_out": {
+            "index": 4,
+            "doc": null,
+            "type_": "u64"
+          },
+          "partial_fillable": {
+            "index": 5,
+            "doc": null,
+            "type_": "bool"
+          },
+          "filled_amount": {
+            "index": 6,
+            "doc": null,
+            "type_": "u64"
+          },
+          "deadline": {
+            "index": 7,
+            "doc": null,
+            "type_": "u64"
+          }
+        }
+      }
+    }
+  },
+  "enums": {}
+}
