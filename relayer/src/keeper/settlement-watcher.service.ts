@@ -5,6 +5,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { BatchStateService } from './batch-state.service';
 import {
+  BatchAbortedHandler,
   FallbackTriggeredHandler,
   SettlementCompleteHandler,
   WinnerSelectedHandler,
@@ -21,6 +22,7 @@ export class SettlementWatcherService implements OnModuleInit {
     private readonly winnerSelectedHandler: WinnerSelectedHandler,
     private readonly settlementCompleteHandler: SettlementCompleteHandler,
     private readonly fallbackTriggeredHandler: FallbackTriggeredHandler,
+    private readonly batchAbortedHandler: BatchAbortedHandler,
   ) {}
 
   onModuleInit() {
@@ -44,6 +46,7 @@ export class SettlementWatcherService implements OnModuleInit {
       WinnerSelectedHandler,
       SettlementCompleteHandler,
       FallbackTriggeredHandler,
+      BatchAbortedHandler,
     ];
 
     for (const HandlerClass of handlers) {

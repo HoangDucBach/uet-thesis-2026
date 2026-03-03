@@ -16,6 +16,7 @@ export const IntentCreatedEvent = bcs.struct('IntentCreatedEvent', {
   buy_type: TypeName,
   sell_amount: bcs.u64(),
   min_amount_out: bcs.u64(),
+  partial_fillable: bcs.bool(),
   deadline: bcs.u64(),
 });
 
@@ -31,11 +32,17 @@ export const BatchOpenedEvent = bcs.struct('BatchOpenedEvent', {
 
 export type BatchOpenedEventType = typeof BatchOpenedEvent.$inferType;
 
+export const BatchAbortedEvent = bcs.struct('BatchAbortedEvent', {
+  batch_id: bcs.u64(),
+});
+
+export type BatchAbortedEventType = typeof BatchAbortedEvent.$inferType;
+
 export const WinnerSelectedEvent = bcs.struct('WinnerSelectedEvent', {
   batch_id: bcs.u64(),
-  winner: bcs.string(),
+  winner: Address,
   winner_score: bcs.u64(),
-  runner_up: bcs.option(bcs.string()),
+  runner_up: bcs.option(Address),
   runner_up_score: bcs.u64(),
 });
 
@@ -43,7 +50,7 @@ export type WinnerSelectedEventType = typeof WinnerSelectedEvent.$inferType;
 
 export const SettlementCompleteEvent = bcs.struct('SettlementCompleteEvent', {
   batch_id: bcs.u64(),
-  winner: bcs.string(),
+  winner: Address,
   actual_cow_pairs: bcs.u64(),
   committed_score: bcs.u64(),
 });
@@ -53,7 +60,7 @@ export type SettlementCompleteEventType =
 
 export const FallbackTriggeredEvent = bcs.struct('FallbackTriggeredEvent', {
   batch_id: bcs.u64(),
-  winner: bcs.string(),
+  winner: Address,
   bond_slashed: bcs.u64(),
 });
 

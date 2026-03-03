@@ -27,6 +27,7 @@ export interface BatchStatus {
     | 'committed'
     | 'executing'
     | 'settled'
+    | 'aborted'
     | 'failed';
   txDigest?: string;
   intentCount: number;

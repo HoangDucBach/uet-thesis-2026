@@ -11,6 +11,7 @@ import { Module } from '@nestjs/common';
 import { BatchStateService } from './batch-state.service';
 import { CloseCommitsProcessor } from './close-commits.processor';
 import {
+  BatchAbortedHandler,
   FallbackTriggeredHandler,
   SettlementCompleteHandler,
   WinnerSelectedHandler,
@@ -46,6 +47,7 @@ import { TriggerFallbackProcessor } from './trigger-fallback.processor';
     WinnerSelectedHandler,
     SettlementCompleteHandler,
     FallbackTriggeredHandler,
+    BatchAbortedHandler,
   ],
   exports: [
     KeeperService,
