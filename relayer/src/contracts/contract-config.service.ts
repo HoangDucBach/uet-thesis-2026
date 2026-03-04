@@ -23,11 +23,13 @@ export class ContractConfigService {
   private deepbookPackageId: string | undefined;
   private cowDexPackageId: string;
   private deepbookRegistryId: string | undefined;
+  private registryConfigId: string;
 
   constructor(private relayConfig: RelayConfigService) {
     this.deepbookPackageId = this.relayConfig.getDeepbookPackageId();
     this.cowDexPackageId = this.relayConfig.getCowDexPackageId();
     this.deepbookRegistryId = this.relayConfig.getDeepbookRegistryId();
+    this.registryConfigId = this.relayConfig.getRegistryConfigId();
   }
 
   // ========================================================================
@@ -72,20 +74,12 @@ export class ContractConfigService {
     return this.cowDexPackageId;
   }
 
+  getRegistryConfigId(): string {
+    return this.registryConfigId;
+  }
+
   getCowDexQualified(item: string): string {
     return COW_DEX.qualified(this.cowDexPackageId, item);
-  }
-
-  getCowDexType(typeKey: keyof typeof COW_DEX.TYPES): string {
-    return this.getCowDexQualified(COW_DEX.TYPES[typeKey]);
-  }
-
-  getCowDexEvent(eventKey: keyof typeof COW_DEX.EVENTS): string {
-    return this.getCowDexQualified(COW_DEX.EVENTS[eventKey]);
-  }
-
-  getCowDexFunction(funcKey: keyof typeof COW_DEX.FUNCTIONS): string {
-    return this.getCowDexQualified(COW_DEX.FUNCTIONS[funcKey]);
   }
 
   // ========================================================================

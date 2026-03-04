@@ -56,6 +56,16 @@ export class RelayConfigService {
     return configId;
   }
 
+  getRegistryConfigId(): string {
+    const registryId = this.configService.get<string>('REGISTRY_CONFIG_ID');
+    if (!registryId) {
+      throw new Error(
+        'REGISTRY_CONFIG_ID is required but not set in environment variables',
+      );
+    }
+    return registryId;
+  }
+
   getGrpcHost(): string {
     return this.configService.get<string>('GRPC_HOST', 'localhost');
   }

@@ -20,6 +20,7 @@ export class KeeperService implements OnModuleInit {
   private readonly logger = new Logger(KeeperService.name);
   private localBatchCounter = 0;
   private globalConfigId: string;
+  private registryConfigId: string;
 
   /**
    * Process-level guard: prevents concurrent open_batch_and_share calls.
@@ -36,6 +37,7 @@ export class KeeperService implements OnModuleInit {
     private readonly lifecycle: LifecycleService,
   ) {
     this.globalConfigId = this.relayConfig.getGlobalConfigId();
+    this.registryConfigId = this.relayConfig.getRegistryConfigId();
   }
 
   onModuleInit() {
@@ -121,13 +123,8 @@ export class KeeperService implements OnModuleInit {
 
     this.logger.debug(`Intent IDs for batch: ${JSON.stringify(intentIds)}`);
 
-    // Use a timestamp-based u64 as the on-chain batch_id — unique across restarts
-    const proposedOnChainBatchId = BigInt(Date.now());
-
-    const { batchOpenedEventData, txDigest } = await this.openBatchExecutor(
-      intentIds,
-      proposedOnChainBatchId,
-    );
+    const { batchOpenedEventData, txDigest } =
+      await this.openBatchExecutor(intentIds);
 
     return {
       localBatchId: batch.batchId,
@@ -140,7 +137,7 @@ export class KeeperService implements OnModuleInit {
     };
   }
 
-  private async openBatchExecutor(intentIds: string[], onChainBatchId: bigint) {
+  private async openBatchExecutor(intentIds: string[]) {
     const executor = new SerialTransactionExecutor({
       client: this.chainService.getJsonRpcClient(),
       signer: this.chainService.getKeypair(),
@@ -154,8 +151,8 @@ export class KeeperService implements OnModuleInit {
       module: SETTLEMENT.MODULE_NAME,
       function: SETTLEMENT.FUNCTIONS.OPEN_BATCH_AND_SHARE,
       arguments: [
+        tx.object(this.registryConfigId),
         tx.object(this.globalConfigId),
-        tx.pure.u64(onChainBatchId),
         tx.pure.vector('id', intentIds),
         tx.object.clock(),
       ],

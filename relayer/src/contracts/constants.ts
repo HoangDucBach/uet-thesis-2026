@@ -56,32 +56,12 @@ export const COW_DEX = {
   // Environment variable key
   PACKAGE_ID_ENV: 'COW_DEX_PACKAGE_ID',
 
-  // Module name
+  // Module name (used as package namespace — no top-level cow_dex module exists)
   MODULE_NAME: 'cow_dex',
 
   // Build full qualified name: {packageId}::module::item
   qualified: (packageId: string, item: string) =>
     `${packageId}::${COW_DEX.MODULE_NAME}::${item}`,
-
-  // Types
-  TYPES: {
-    BATCH: 'Batch',
-    INTENT: 'Intent',
-  },
-
-  // Events
-  EVENTS: {
-    BATCH_CREATED: 'BatchCreatedEvent',
-    BATCH_SETTLED: 'BatchSettledEvent',
-    SOLVER_COMMITTED: 'SolverCommittedEvent',
-  },
-
-  // Public Functions
-  FUNCTIONS: {
-    CREATE_BATCH: 'create_batch',
-    COMMIT_SOLUTION: 'commit_solution',
-    EXECUTE_SOLUTION: 'execute_solution',
-  },
 } as const;
 
 // ============================================================================
@@ -124,8 +104,9 @@ export const INTENT_BOOK = {
 // ============================================================================
 
 export const SETTLEMENT = {
-  // Environment variable key
+  // Environment variable keys
   PACKAGE_ID_ENV: 'COW_DEX_PACKAGE_ID',
+  REGISTRY_ID_ENV: 'REGISTRY_CONFIG_ID',
 
   // Module name
   MODULE_NAME: 'settlement',
@@ -136,6 +117,7 @@ export const SETTLEMENT = {
 
   // Types
   TYPES: {
+    BATCH_REGISTRY: 'BatchRegistry',
     AUCTION_STATE: 'AuctionState',
     SETTLEMENT_TICKET: 'SettlementTicket',
     COMMIT_ENTRY: 'CommitEntry',
@@ -159,6 +141,7 @@ export const SETTLEMENT = {
     CLOSE_COMMITS: 'close_commits',
     OPEN_SETTLEMENT: 'open_settlement',
     PROCESS_INTENT: 'process_intent',
+    PROCESS_INTENT_PARTIAL: 'process_intent_partial',
     CLOSE_SETTLEMENT: 'close_settlement',
     TRIGGER_FALLBACK: 'trigger_fallback',
     CLAIM_REFUND: 'claim_refund',
@@ -184,20 +167,27 @@ export const CONFIG = {
   TYPES: {
     GLOBAL_CONFIG: 'GlobalConfig',
     ADMIN_CAP: 'AdminCap',
+    ACL: 'ACL',
   },
 
   // Events
   EVENTS: {
-    CONFIG_UPDATED: 'ConfigUpdatedEvent',
-    MIN_BOND_UPDATED: 'MinBondUpdatedEvent',
-    PROTOCOL_FEE_UPDATED: 'ProtocolFeeUpdatedEvent',
+    UPDATE_MIN_BOND: 'UpdateMinBondEvent',
+    UPDATE_COMMIT_DURATION: 'UpdateCommitDurationEvent',
+    UPDATE_GRACE_PERIOD: 'UpdateGracePeriodEvent',
+    UPDATE_PROTOCOL_FEE: 'UpdateProtocolFeeEvent',
+    ROLE_GRANTED: 'RoleGrantedEvent',
+    ROLE_REVOKED: 'RoleRevokedEvent',
   },
 
   // Public Functions
   FUNCTIONS: {
-    INITIALIZE: 'initialize',
-    UPDATE_MIN_BOND: 'update_min_bond',
-    UPDATE_PROTOCOL_FEE: 'update_protocol_fee',
+    SET_MIN_BOND: 'set_min_bond',
+    SET_COMMIT_DURATION: 'set_commit_duration',
+    SET_GRACE_PERIOD: 'set_grace_period',
+    SET_PROTOCOL_FEE: 'set_protocol_fee',
+    GRANT_ROLE: 'grant_role',
+    REVOKE_ROLE: 'revoke_role',
   },
 } as const;
 
