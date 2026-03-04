@@ -34,6 +34,14 @@ public enum AuctionPhase has copy, drop, store {
 
 // === Structs ===
 
+/// Global batch counter state — shared object for auto-incrementing batch IDs.
+/// * `id`: Unique object ID.
+/// * `next_batch_id`: Counter for next batch (starts at 0).
+public struct BatchRegistry has key {
+    id: UID,
+    next_batch_id: u64,
+}
+
 /// Hot Potato — no abilities. Forces completion of settlement.
 /// Must be consumed by close_settlement() or PTB validation fails.
 /// Tracks actual CoW pairs delivered.
@@ -123,38 +131,49 @@ public struct FallbackTriggeredEvent has copy, drop {
 
 // === Functions ===
 
+/// Initialize global batch counter (call once during deployment).
+fun init(ctx: &mut TxContext) {
+    transfer::share_object(BatchRegistry {
+        id: object::new(ctx),
+        next_batch_id: 0,
+    });
+}
+
 /// Entry func to open a new batch auction and share.
 ///
+/// * `batch_state`: Global batch counter state.
 /// * `config`: GlobalConfig for protocol parameters.
-/// * `batch_id`: Batch sequence number.
 /// * `intent_ids`: Vector of Intent IDs in this batch.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 entry fun open_batch_and_share(
+    batch_state: &mut BatchRegistry,
     config: &GlobalConfig,
-    batch_id: u64,
     intent_ids: vector<ID>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    let state = open_batch(config, batch_id, intent_ids, clock, ctx);
+    let state = open_batch(batch_state, config, intent_ids, clock, ctx);
     transfer::share_object(state);
 }
 
-/// Open a new batch auction.
+/// Open a new batch auction with auto-generated batch ID.
 ///
+/// * `batch_state`: Global batch counter state (auto-increments).
 /// * `config`: GlobalConfig for protocol parameters.
-/// * `batch_id`: Batch sequence number.
 /// * `intent_ids`: Vector of Intent IDs in this batch.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 public fun open_batch(
+    batch_state: &mut BatchRegistry,
     config: &GlobalConfig,
-    batch_id: u64,
     intent_ids: vector<ID>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): AuctionState {
+    let batch_id = batch_state.next_batch_id;
+    batch_state.next_batch_id = batch_id + 1;
+
     let current_time_ms = clock.timestamp_ms();
     let commit_end_ms = current_time_ms + config.commit_duration_ms();
     let execute_deadline_ms = commit_end_ms + config.grace_period_ms();
@@ -565,7 +584,28 @@ public fun is_aborted_phase(state: &AuctionState): bool {
     state.phase == AuctionPhase::Aborted
 }
 
+// === Getters ===
+
+/// Get next batch ID (for monitoring/indexing).
+public fun next_batch_id(batch_state: &BatchRegistry): u64 {
+    batch_state.next_batch_id
+}
+
 // === Test Helpers ===
+
+#[test_only]
+public fun create_batch_state_for_testing(ctx: &mut TxContext): BatchRegistry {
+    BatchRegistry {
+        id: object::new(ctx),
+        next_batch_id: 0,
+    }
+}
+
+#[test_only]
+public fun destroy_batch_state_for_testing(state: BatchRegistry) {
+    let BatchRegistry { id, next_batch_id: _ } = state;
+    object::delete(id);
+}
 
 #[test_only]
 public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {

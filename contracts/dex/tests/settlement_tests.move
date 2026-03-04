@@ -28,11 +28,18 @@ const EDUPLICATE_COMMIT: u64 = 7;
 #[test]
 fun test_open_batch_initial_state() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 1000);
 
-    let state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     assert!(settlement::is_commit_phase(&state));
     assert!(settlement::batch_id(&state) == 0);
@@ -45,6 +52,7 @@ fun test_open_batch_initial_state() {
     );
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -54,11 +62,18 @@ fun test_open_batch_initial_state() {
 #[test]
 fun test_commit_registers_winner() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -74,6 +89,7 @@ fun test_commit_registers_winner() {
     assert!(settlement::winner_score(&state) == 5);
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -82,11 +98,18 @@ fun test_commit_registers_winner() {
 #[expected_failure(abort_code = EBOND_TOO_SMALL, location = cow_dex::settlement)]
 fun test_commit_insufficient_bond_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -99,6 +122,7 @@ fun test_commit_insufficient_bond_aborts() {
     );
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -107,11 +131,18 @@ fun test_commit_insufficient_bond_aborts() {
 #[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
 fun test_commit_after_deadline_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 3000);
     settlement::commit(
@@ -124,6 +155,7 @@ fun test_commit_after_deadline_aborts() {
     );
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -132,11 +164,18 @@ fun test_commit_after_deadline_aborts() {
 #[expected_failure(abort_code = EDUPLICATE_COMMIT, location = cow_dex::settlement)]
 fun test_commit_duplicate_same_sender_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -157,6 +196,7 @@ fun test_commit_duplicate_same_sender_aborts() {
     );
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -173,10 +213,12 @@ fun test_winner_selection_higher_score_wins() {
     {
         let ctx = ts::ctx(&mut scenario);
         let (config, cap) = config::create_for_testing(ctx);
+        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
         let mut clock = clock::create_for_testing(ctx);
         clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&config, 0, vector::empty(), &clock, ctx);
+        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
         clock::destroy_for_testing(clock);
+        settlement::destroy_batch_state_for_testing(batch_state);
         transfer::public_share_object(config);
         settlement::share_state_for_testing(state);
         std::unit_test::destroy(cap);
@@ -250,10 +292,12 @@ fun test_winner_tiebreak_earlier_timestamp_wins() {
     {
         let ctx = ts::ctx(&mut scenario);
         let (config, cap) = config::create_for_testing(ctx);
+        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
         let mut clock = clock::create_for_testing(ctx);
         clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&config, 0, vector::empty(), &clock, ctx);
+        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
         clock::destroy_for_testing(clock);
+        settlement::destroy_batch_state_for_testing(batch_state);
         transfer::public_share_object(config);
         settlement::share_state_for_testing(state);
         std::unit_test::destroy(cap);
@@ -320,16 +364,24 @@ fun test_winner_tiebreak_earlier_timestamp_wins() {
 #[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
 fun test_close_commits_before_deadline_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 1999);
     settlement::close_commits(&mut state, &clock);
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -347,10 +399,12 @@ fun test_open_settlement_non_winner_aborts() {
     {
         let ctx = ts::ctx(&mut scenario);
         let (config, cap) = config::create_for_testing(ctx);
+        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
         let mut clock = clock::create_for_testing(ctx);
         clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&config, 0, vector::empty(), &clock, ctx);
+        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
         clock::destroy_for_testing(clock);
+        settlement::destroy_batch_state_for_testing(batch_state);
         transfer::public_share_object(config);
         settlement::share_state_for_testing(state);
         std::unit_test::destroy(cap);
@@ -399,11 +453,18 @@ fun test_open_settlement_non_winner_aborts() {
 #[expected_failure(abort_code = ESCORE_MISMATCH, location = cow_dex::settlement)]
 fun test_close_settlement_score_mismatch_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -424,6 +485,7 @@ fun test_close_settlement_score_mismatch_aborts() {
     settlement::close_settlement(&mut state, ticket, &mut ctx);
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -434,11 +496,18 @@ fun test_close_settlement_score_mismatch_aborts() {
 #[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
 fun test_trigger_fallback_before_deadline_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -456,6 +525,7 @@ fun test_trigger_fallback_before_deadline_aborts() {
     settlement::trigger_fallback(&mut state, &clock, &mut ctx);
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -463,11 +533,18 @@ fun test_trigger_fallback_before_deadline_aborts() {
 #[test]
 fun test_trigger_fallback_after_deadline_slashes_bond() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -487,6 +564,7 @@ fun test_trigger_fallback_after_deadline_slashes_bond() {
     assert!(settlement::is_failed_phase(&state));
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -497,11 +575,18 @@ fun test_trigger_fallback_after_deadline_slashes_bond() {
 #[expected_failure(abort_code = EWRONG_PHASE, location = cow_dex::settlement)]
 fun test_claim_refund_during_commit_phase_aborts() {
     let mut ctx = tx_context::dummy();
+    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(&config, 0, vector::empty(), &clock, &mut ctx);
+    let mut state = settlement::open_batch(
+        &mut batch_state,
+        &config,
+        vector::empty(),
+        &clock,
+        &mut ctx,
+    );
 
     clock::set_for_testing(&mut clock, 100);
     settlement::commit(
@@ -516,6 +601,7 @@ fun test_claim_refund_during_commit_phase_aborts() {
     settlement::claim_refund(&mut state, &mut ctx);
 
     clock::destroy_for_testing(clock);
+    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
     std::unit_test::destroy(state);
 }
@@ -530,10 +616,12 @@ fun test_claim_refund_loser_after_done() {
     {
         let ctx = ts::ctx(&mut scenario);
         let (config, cap) = config::create_for_testing(ctx);
+        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
         let mut clock = clock::create_for_testing(ctx);
         clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&config, 0, vector::empty(), &clock, ctx);
+        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
         clock::destroy_for_testing(clock);
+        settlement::destroy_batch_state_for_testing(batch_state);
         transfer::public_share_object(config);
         settlement::share_state_for_testing(state);
         std::unit_test::destroy(cap);
