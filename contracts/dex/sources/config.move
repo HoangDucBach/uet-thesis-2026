@@ -14,12 +14,14 @@ const DEFAULT_MIN_BOND: u64 = 1_000_000_000; // 1 SUI
 const DEFAULT_COMMIT_DURATION_MS: u64 = 2000; // 2 seconds
 const DEFAULT_GRACE_PERIOD_MS: u64 = 5000; // 5 seconds
 const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
+const DEFAULT_SCORE_TOLERANCE_BPS: u64 = 9_500; // 95% — tolerance for mid_price drift between commit and execute
 
 // === Upper Bounds (Overflow Protection) ===
 
 const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1 trillion base units (~max reasonable bond)
 const MAX_COMMIT_DURATION_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_GRACE_PERIOD_MS: u64 = 604_800_000; // 7 days in milliseconds
+const MAX_SCORE_TOLERANCE_BPS: u64 = 10_000; // 100% — tolerance cannot exceed full score
 
 // === ACL Roles ===
 
@@ -31,6 +33,7 @@ const EUnauthorized: u64 = 0;
 const EInvalidFeeRate: u64 = 1;
 const EInvalidBondAmount: u64 = 2;
 const EInvalidDuration: u64 = 3;
+const EInvalidTolerance: u64 = 4;
 
 // === Structs ===
 
@@ -51,6 +54,9 @@ public struct ACL has store {
 /// * `commit_duration_ms`: Duration of commit phase.
 /// * `grace_period_ms`: Grace period for winner execution.
 /// * `protocol_fee_bps`: Protocol fee in basis points.
+/// * `score_tolerance_bps`: Minimum fraction of committed surplus that must be delivered,
+///   expressed in basis points (e.g. 9500 = 95%). Accounts for mid_price drift between
+///   commit and execute phases.
 /// * `acl`: Access control list.
 /// * `version`: Protocol version for upgrade tracking.
 public struct GlobalConfig has key, store {
@@ -59,6 +65,7 @@ public struct GlobalConfig has key, store {
     commit_duration_ms: u64,
     grace_period_ms: u64,
     protocol_fee_bps: u64,
+    score_tolerance_bps: u64,
     acl: ACL,
     version: u64,
 }
@@ -85,6 +92,12 @@ public struct UpdateGracePeriodEvent has copy, drop {
 
 /// Emitted when protocol fee is updated.
 public struct UpdateProtocolFeeEvent has copy, drop {
+    old_value: u64,
+    new_value: u64,
+}
+
+/// Emitted when score tolerance is updated.
+public struct UpdateScoreToleranceEvent has copy, drop {
     old_value: u64,
     new_value: u64,
 }
@@ -117,6 +130,7 @@ fun init(ctx: &mut TxContext) {
         commit_duration_ms: DEFAULT_COMMIT_DURATION_MS,
         grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
         protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
+        score_tolerance_bps: DEFAULT_SCORE_TOLERANCE_BPS,
         acl: ACL { members: table::new(ctx) },
         version: INITIAL_VERSION,
     };
@@ -193,6 +207,26 @@ public fun set_protocol_fee(config: &mut GlobalConfig, new_protocol_fee_bps: u64
     emit(UpdateProtocolFeeEvent {
         old_value,
         new_value: new_protocol_fee_bps,
+    });
+}
+
+/// Update score tolerance (minimum fraction of committed surplus that must be delivered).
+/// * `config`: The GlobalConfig.
+/// * `new_score_tolerance_bps`: New tolerance in basis points (0-10000, e.g. 9500 = 95%).
+/// * `_cap`: AdminCap for authorization.
+public fun set_score_tolerance(
+    config: &mut GlobalConfig,
+    new_score_tolerance_bps: u64,
+    _cap: &AdminCap,
+) {
+    assert!(new_score_tolerance_bps <= MAX_SCORE_TOLERANCE_BPS, EInvalidTolerance);
+
+    let old_value = config.score_tolerance_bps;
+    config.score_tolerance_bps = new_score_tolerance_bps;
+
+    emit(UpdateScoreToleranceEvent {
+        old_value,
+        new_value: new_score_tolerance_bps,
     });
 }
 
@@ -294,6 +328,11 @@ public fun protocol_fee_bps(config: &GlobalConfig): u64 {
     config.protocol_fee_bps
 }
 
+/// Get score tolerance in basis points.
+public fun score_tolerance_bps(config: &GlobalConfig): u64 {
+    config.score_tolerance_bps
+}
+
 /// Get current version.
 public fun version(config: &GlobalConfig): u64 {
     config.version
@@ -319,6 +358,9 @@ public fun default_grace_period_ms(): u64 { DEFAULT_GRACE_PERIOD_MS }
 public fun default_protocol_fee_bps(): u64 { DEFAULT_PROTOCOL_FEE_BPS }
 
 #[test_only]
+public fun default_score_tolerance_bps(): u64 { DEFAULT_SCORE_TOLERANCE_BPS }
+
+#[test_only]
 public fun max_protocol_fee_bps(): u64 { MAX_PROTOCOL_FEE_BPS }
 
 #[test_only]
@@ -333,6 +375,7 @@ public fun create_for_testing(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
         commit_duration_ms: DEFAULT_COMMIT_DURATION_MS,
         grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
         protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
+        score_tolerance_bps: DEFAULT_SCORE_TOLERANCE_BPS,
         acl: ACL { members: table::new(ctx) },
         version: INITIAL_VERSION,
     };

@@ -482,7 +482,7 @@ fun test_close_settlement_score_mismatch_aborts() {
     clock::set_for_testing(&mut clock, 3000);
     let ticket = settlement::open_settlement(&mut state, &clock, &ctx);
 
-    settlement::close_settlement(&mut state, ticket, &mut ctx);
+    settlement::close_settlement(&mut state, ticket, &config, &mut ctx);
 
     clock::destroy_for_testing(clock);
     settlement::destroy_batch_state_for_testing(batch_state);
@@ -676,8 +676,10 @@ fun test_claim_refund_loser_after_done() {
         settlement::close_commits(&mut state, &clock);
         clock::set_for_testing(&mut clock, 3000);
 
+        let config = ts::take_shared<config::GlobalConfig>(&scenario);
         let ticket = settlement::open_settlement(&mut state, &clock, ctx);
-        settlement::close_settlement(&mut state, ticket, ctx);
+        settlement::close_settlement(&mut state, ticket, &config, ctx);
+        ts::return_shared(config);
 
         assert!(settlement::is_done_phase(&state));
         clock::destroy_for_testing(clock);

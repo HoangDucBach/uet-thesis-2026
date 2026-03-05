@@ -4,9 +4,9 @@ use cow_dex::config::GlobalConfig;
 use cow_dex::intent_book::{Self, Intent};
 use cow_dex::math;
 use deepbook::pool::Pool as DeepbookPool;
-use sui::balance::{Self, Balance};
+use sui::balance::Balance;
 use sui::clock::Clock;
-use sui::coin::{Self, Coin};
+use sui::coin::Coin;
 use sui::event::emit;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
@@ -44,19 +44,19 @@ public struct BatchRegistry has key {
 
 /// Hot Potato — no abilities. Forces completion of settlement.
 /// Must be consumed by close_settlement() or PTB validation fails.
-/// Tracks actual CoW pairs delivered.
+/// Tracks actual surplus (in BuyCoin units) delivered across all processed intents.
 ///
 /// * `batch_id`: Batch this ticket is for.
-/// * `committed_score`: Winner's committed n_cow_pairs count.
-/// * `actual_cow_pairs`: Incremented per process_intent() call.
+/// * `committed_score`: Winner's committed surplus estimate (in USDC-scaled units).
+/// * `actual_surplus`: Accumulated surplus per process_intent() call.
 public struct SettlementTicket {
     batch_id: u64,
     committed_score: u64,
-    actual_cow_pairs: u64,
+    actual_surplus: u64,
 }
 
 /// Commitment entry for a solver in commit phase.
-/// * `score`: Number of CoW pairs committed.
+/// * `score`: Estimated surplus committed by solver (in USDC-scaled units).
 /// * `bond`: SUI balance for griefing protection.
 /// * `timestamp`: When committed (for tiebreaker).
 public struct CommitEntry has store {
@@ -118,7 +118,7 @@ public struct BatchAbortedEvent has copy, drop {
 public struct SettlementCompleteEvent has copy, drop {
     batch_id: u64,
     winner: address,
-    actual_cow_pairs: u64,
+    actual_surplus: u64,
     committed_score: u64,
 }
 
@@ -234,7 +234,6 @@ public fun commit(
     };
     state.commits.add(sender, entry);
 
-    // Update winner on-the-fly (highest score, earliest timestamp for ties)
     if (state.winner.is_none()) {
         state.winner = option::some(sender);
         state.winner_score = score;
@@ -244,17 +243,14 @@ public fun commit(
         let current_winner_timestamp = entry_ref.timestamp;
 
         if (score > state.winner_score) {
-            // New winner is better
             state.runner_up = option::some(current_winner);
             state.runner_up_score = state.winner_score;
             state.winner = option::some(sender);
             state.winner_score = score;
         } else if (score > state.runner_up_score) {
-            // Not better than winner, but better than runner-up
             state.runner_up = option::some(sender);
             state.runner_up_score = score;
         } else if (score == state.winner_score && current_time_ms < current_winner_timestamp) {
-            // Tie with winner, but earlier timestamp
             state.runner_up = option::some(current_winner);
             state.runner_up_score = state.winner_score;
             state.winner = option::some(sender);
@@ -308,12 +304,11 @@ public fun open_settlement(
     SettlementTicket {
         batch_id: state.batch_id,
         committed_score: state.winner_score,
-        actual_cow_pairs: 0,
+        actual_surplus: 0,
     }
 }
 
 /// Process a single CoW pair intent.
-/// Only holder of SettlementTicket can call (only winner has it).
 ///
 /// * `ticket`: SettlementTicket (must be mutable to increment counter).
 /// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
@@ -339,38 +334,28 @@ public fun process_intent<SellCoin, BuyCoin>(
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
-    // 2. Consume intent on-chain (deleted — replay impossible by Sui linear types)
+    // 2. Consume intent
     let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
     let sell_amount = sell_balance.value();
 
-    // 3. Calculate reference price floor using DeepBook mid_price
+    // 3. Calculate price floor via DeepBook mid_price
     let mid_price = pool.mid_price(clock);
-
-    // fair_out = sell_amount * mid_price / math::float_scaling() (raw math, no decimals needed)
     let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / math::float_scaling();
-
-    // Safety check: prevent overflow when casting back to u64
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
 
-    // price_floor = max(min_amount_out, fair_out * 99%)
-    // Do slippage calculation in u128 to prevent overflow
     let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
     assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
     let slippage_protection = (slippage_u128 as u64);
     let price_floor = math::max_u64_val(min_amount_out, slippage_protection);
 
-    // 4. Verify payout meets reference price floor (solver cannot fake prices)
+    // 4. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 5. Transfer payout to user (owned object, fast path)
+    // 5. Settle
     transfer::public_transfer(payout, owner);
-
-    // 6. Return sell coins to solver
     transfer::public_transfer(sell_balance.into_coin(ctx), ctx.sender());
-
-    // 7. Increment actual CoW pair counter
-    ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
 }
 
 /// Process a partial fill for a partial_fillable intent.
@@ -398,15 +383,14 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
-    // 2. Split fill_amount from intent balance (asserts partial_fillable, fill <= remaining)
+    // 2. Split fill_amount from intent
     let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
         fill_amount,
     );
 
-    // 3. Calculate proportional reference price floor using DeepBook mid_price
+    // 3. Calculate price floor via DeepBook mid_price
     let mid_price = pool.mid_price(clock);
-
     let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / math::float_scaling();
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
@@ -416,28 +400,25 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     let slippage_protection = (slippage_u128 as u64);
     let price_floor = math::max_u64_val(proportional_min_out, slippage_protection);
 
-    // 4. Verify payout meets proportional reference price floor
+    // 4. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 5. Transfer payout to user
+    // 5. Settle
     transfer::public_transfer(payout, owner);
-
-    // 6. Return partial sell coins to solver
     transfer::public_transfer(partial_sell_balance.into_coin(ctx), ctx.sender());
-
-    // 7. Increment counter (counts as 1 CoW pair per partial fill call)
-    ticket.actual_cow_pairs = ticket.actual_cow_pairs + 1;
 }
 
 /// Close settlement — consume Hot Potato, verify score, return winner bond.
-/// Last command in PTB before flash_repay().
 ///
 /// * `state`: AuctionState.
 /// * `ticket`: SettlementTicket (consumed — satisfaction check).
+/// * `config`: GlobalConfig for score_tolerance_bps.
 /// * `ctx`: Transaction context.
 public fun close_settlement(
     state: &mut AuctionState,
     ticket: SettlementTicket,
+    config: &GlobalConfig,
     ctx: &mut TxContext,
 ) {
     assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
@@ -445,13 +426,17 @@ public fun close_settlement(
     let SettlementTicket {
         batch_id,
         committed_score,
-        actual_cow_pairs,
+        actual_surplus,
     } = ticket;
 
     assert!(batch_id == state.batch_id, EWrongBatch);
 
-    // Verify actual delivery >= committed score
-    assert!(actual_cow_pairs >= committed_score, EScoreMismatch);
+    // Verify actual surplus >= score_tolerance_bps% of committed score.
+    let threshold =
+        (
+            (committed_score as u128) * (config.score_tolerance_bps() as u128) / 10_000u128 as u128,
+        ) as u64;
+    assert!(actual_surplus >= threshold, EScoreMismatch);
 
     let winner = *state.winner.borrow();
 
@@ -464,7 +449,7 @@ public fun close_settlement(
     emit(SettlementCompleteEvent {
         batch_id: state.batch_id,
         winner,
-        actual_cow_pairs,
+        actual_surplus,
         committed_score,
     });
 }
@@ -485,8 +470,6 @@ public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut T
     let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(winner);
     let slashed_amount = bond.value();
 
-    // Transfer slashed bond to caller (reward for maintaining protocol)
-    // In production, this should go to a treasury address
     transfer::public_transfer(bond.into_coin(ctx), ctx.sender());
 
     state.phase = AuctionPhase::Failed;
@@ -559,9 +542,9 @@ public fun ticket_committed_score(ticket: &SettlementTicket): u64 {
     ticket.committed_score
 }
 
-/// Get ticket's actual CoW pairs count.
-public fun ticket_actual_cow_pairs(ticket: &SettlementTicket): u64 {
-    ticket.actual_cow_pairs
+/// Get ticket's accumulated actual surplus.
+public fun ticket_actual_surplus(ticket: &SettlementTicket): u64 {
+    ticket.actual_surplus
 }
 
 public fun is_commit_phase(state: &AuctionState): bool {
@@ -609,7 +592,7 @@ public fun destroy_batch_state_for_testing(state: BatchRegistry) {
 
 #[test_only]
 public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {
-    SettlementTicket { batch_id, committed_score, actual_cow_pairs: 0 }
+    SettlementTicket { batch_id, committed_score, actual_surplus: 0 }
 }
 
 #[test_only]
