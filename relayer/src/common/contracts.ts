@@ -51,7 +51,7 @@ export type WinnerSelectedEventType = typeof WinnerSelectedEvent.$inferType;
 export const SettlementCompleteEvent = bcs.struct('SettlementCompleteEvent', {
   batch_id: bcs.u64(),
   winner: Address,
-  actual_cow_pairs: bcs.u64(),
+  actual_surplus: bcs.u64(),
   committed_score: bcs.u64(),
 });
 

@@ -37,7 +37,7 @@ export class SettlementCompleteHandler implements IEventHandler {
 
       this.logger.debug(
         `batch_id=${parsed.batch_id} winner=${parsed.winner} ` +
-          `actual_cow_pairs=${parsed.actual_cow_pairs} committed_score=${parsed.committed_score}`,
+          `actual_surplus=${parsed.actual_surplus} committed_score=${parsed.committed_score}`,
       );
 
       const batch = await this.batchState.getByOnChainBatchId(

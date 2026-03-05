@@ -23,7 +23,7 @@ interface WinnerSelectedJson {
 interface SettlementCompleteJson {
   batch_id: string;
   winner: string;
-  actual_cow_pairs: string;
+  actual_surplus: string;
   committed_score: string;
 }
 
