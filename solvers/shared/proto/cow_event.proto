@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package cow_event;
+
+service EventStream {
+  rpc SubscribeCowEvents(Empty) returns (stream CowEvent);
+}
+
+message Empty {}
+
+message CowEvent {
+  string package_id = 1;
+  string module_name = 2;
+  string event_name = 3;
+  string tx_digest = 4;
+  int64 checkpoint_seq = 5;
+  int64 timestamp_ms = 6;
+  bytes contents = 7;
+}

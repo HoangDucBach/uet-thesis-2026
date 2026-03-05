@@ -1,0 +1,28 @@
+{
+  "name": "solvers",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "solver-a",
+    "solver-b",
+    "solver-c"
+  ],
+  "scripts": {
+    "solver-a": "bun run solver-a/index.ts",
+    "solver-b": "bun run solver-b/index.ts",
+    "solver-c": "bun run solver-c/index.ts",
+    "all": "bun run solver-a & bun run solver-b & bun run solver-c"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@mysten/sui": "^2.6.0",
+    "hono": "^4.12.5"
+  }
+}
