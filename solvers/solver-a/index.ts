@@ -30,15 +30,12 @@ import {
   SerialTransactionExecutor,
 } from "@mysten/sui/transactions";
 
-// ─── Bootstrap .env ───────────────────────────────────────────────────────────
-// Bun natively loads .env; no dotenv package needed.
-
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const CONFIG = {
   GRPC_HOST: process.env.SUI_INDEXER_GRPC_HOST ?? "localhost",
   GRPC_PORT: Number(process.env.SUI_INDEXER_GRPC_PORT ?? 50051),
-  NETWORK: (process.env.SUI_ENV ?? "testnet") as "testnet" | "mainnet",
+  NETWORK: (process.env.NETWORK ?? "testnet") as "testnet" | "mainnet",
   PACKAGE_ID: process.env.PACKAGE_ID!,
   GLOBAL_CONFIG_ID: process.env.GLOBAL_CONFIG_ID!,
   DEEPBOOK_REGISTRY_ID: process.env.DEEPBOOK_REGISTRY_ID,
@@ -104,10 +101,6 @@ interface BatchSolution {
   ammRoutes: AmmRoute[];
   totalSurplus: bigint;
 }
-
-// ─── Relay Event Types — imported from ../shared ─────────────────────────────
-// RelayEvent, IntentCreatedPayload, BatchOpenedPayload, WinnerSelectedPayload,
-// GrpcEventClient — all live in solvers/shared/events.ts
 
 // ─── Intent Pool ──────────────────────────────────────────────────────────────
 
@@ -185,46 +178,44 @@ class PriceOracle {
   private readonly TTL_MS = 2_000;
   private poolRegistry = new Map<
     string,
-    { poolKey: string; isBaseToQuote: boolean }
+    { poolKey: string; isBaseToQuote: boolean; baseDecimals: number; quoteDecimals: number }
   >();
 
   constructor(private readonly dbClient: DeepBookClient) {
-    // Default testnet pools — SDK poolKey = "BASE_QUOTE"
-    this.register("0x2::sui::SUI", "DBUSDC", "SUI_DBUSDC");
-    this.register("0x2::sui::SUI", "DBUSDT", "SUI_DBUSDT");
-    this.register("DEEP", "0x2::sui::SUI", "DEEP_SUI");
-    this.register("DEEP", "DBUSDC", "DEEP_DBUSDC");
+    this.register("0x2::sui::SUI", "DBUSDC", "SUI_DBUSDC", 9, 6);
+    this.register("0x2::sui::SUI", "DBUSDT", "SUI_DBUSDT", 9, 6);
+    this.register("DEEP", "0x2::sui::SUI", "DEEP_SUI", 6, 9);
+    this.register("DEEP", "DBUSDC", "DEEP_DBUSDC", 6, 6);
   }
 
   /**
    * Register a pool for a token pair.
    * Registers both full type strings and short names in both directions.
+   * baseDecimals / quoteDecimals are used to apply the decimal correction factor
+   * when converting between raw on-chain units:
+   *   decimalFactor = 10^(quoteDecimals - baseDecimals)
    */
-  register(baseType: string, quoteType: string, poolKey: string): void {
+  register(
+    baseType: string,
+    quoteType: string,
+    poolKey: string,
+    baseDecimals: number,
+    quoteDecimals: number,
+  ): void {
     const bShort = shortType(baseType);
     const qShort = shortType(quoteType);
-    this.poolRegistry.set(`${baseType}→${quoteType}`, {
-      poolKey,
-      isBaseToQuote: true,
-    });
-    this.poolRegistry.set(`${bShort}→${qShort}`, {
-      poolKey,
-      isBaseToQuote: true,
-    });
-    this.poolRegistry.set(`${quoteType}→${baseType}`, {
-      poolKey,
-      isBaseToQuote: false,
-    });
-    this.poolRegistry.set(`${qShort}→${bShort}`, {
-      poolKey,
-      isBaseToQuote: false,
-    });
+    const entry = { poolKey, isBaseToQuote: true, baseDecimals, quoteDecimals };
+    const entryInv = { poolKey, isBaseToQuote: false, baseDecimals, quoteDecimals };
+    this.poolRegistry.set(`${baseType}→${quoteType}`, entry);
+    this.poolRegistry.set(`${bShort}→${qShort}`, entry);
+    this.poolRegistry.set(`${quoteType}→${baseType}`, entryInv);
+    this.poolRegistry.set(`${qShort}→${bShort}`, entryInv);
   }
 
   resolvePool(
     sellType: string,
     buyType: string,
-  ): { poolKey: string; isBaseToQuote: boolean } | null {
+  ): { poolKey: string; isBaseToQuote: boolean; baseDecimals: number; quoteDecimals: number } | null {
     return (
       this.poolRegistry.get(`${sellType}→${buyType}`) ??
       this.poolRegistry.get(`${shortType(sellType)}→${shortType(buyType)}`) ??
@@ -247,14 +238,10 @@ class PriceOracle {
     if (!pool) return 0n;
     const mid = await this.getMidPrice(pool.poolKey);
     const FS = CONFIG.FLOAT_SCALING;
-    const rawOut = pool.isBaseToQuote
-      ? (intent.sellAmount * mid) / FS
-      : (intent.sellAmount * FS) / mid;
+    const rawOut = applyDecimalFactor(pool, intent.sellAmount, mid, FS);
     return (rawOut * (10_000n - CONFIG.DEEPBOOK_FEE_BPS)) / 10_000n;
   }
 }
-
-// ─── GrpcEventClient — imported from ../shared ───────────────────────────────
 
 // ─── Solver A ─────────────────────────────────────────────────────────────────
 
@@ -268,6 +255,7 @@ class SolverA {
   private readonly intentPool = new IntentPool();
   private cachedPairs: CowPair[] = [];
   private activeSolution: BatchSolution | null = null;
+  private executor!: SerialTransactionExecutor;
 
   /**
    * coinType → largest coin object ID (refreshed after each settled batch).
@@ -289,18 +277,6 @@ class SolverA {
       network: CONFIG.NETWORK,
     });
 
-    // Patch core.simulateTransaction on this instance to inject our address.
-    const _origSim = this.suiClient.core.simulateTransaction.bind(
-      this.suiClient.core,
-    );
-    
-    this.suiClient.core.simulateTransaction = async (opts: any) => {
-      if (opts.transaction && !(opts.transaction instanceof Uint8Array)) {
-        opts.transaction.setSenderIfNotSet(this.address);
-      }
-      return _origSim(opts);
-    };
-
     this.dbClient = new DeepBookClient({
       address: this.address,
       network: CONFIG.NETWORK,
@@ -308,6 +284,10 @@ class SolverA {
     });
 
     this.oracle = new PriceOracle(this.dbClient);
+    this.executor = new SerialTransactionExecutor({
+      client: this.suiClient,
+      signer: this.keypair,
+    });
     console.log(`[SolverA] address=${this.address}`);
   }
 
@@ -324,8 +304,8 @@ class SolverA {
     const intent: IntentInfo = {
       intentId: data.intent_id,
       owner: data.owner,
-      sellType: data.sell_type.trim(),
-      buyType: data.buy_type.trim(),
+      sellType: normalizeType(data.sell_type.trim()),
+      buyType: normalizeType(data.buy_type.trim()),
       sellAmount: BigInt(data.sell_amount),
       minAmountOut: BigInt(data.min_amount_out),
       partialFillable: data.partial_fillable,
@@ -360,6 +340,13 @@ class SolverA {
 
     if (timeLeft < 500) {
       console.warn("[SolverA] Commit window too tight — skipping batch");
+      return;
+    }
+
+    if (this.activeSolution !== null) {
+      console.warn(
+        `[SolverA] Already have active solution #${this.activeSolution.batchId} — skipping batch #${batchId}`,
+      );
       return;
     }
 
@@ -494,6 +481,18 @@ class SolverA {
   /**
    * Score a CoW pair using live mid_price.
    * Returns null if either intent fails min_amount_out at current price.
+   *
+   * payoutToA: how much intentA.buyType intentA receives (= intentB.sellAmount capped at fair price)
+   * payoutToB: how much intentB.buyType intentB receives (= intentA.sellAmount capped at fair price)
+   *
+   * Decimal correction:
+   *   DeepBook mid_price is in FLOAT_SCALING (1e9) units but is the raw ratio
+   *   quote_units/base_units.  To convert between on-chain token amounts we must
+   *   also account for the difference in token decimals:
+   *     decimalFactor = 10^(quoteDecimals - baseDecimals)
+   *   base→quote:  sell * mid * DF / (FS * DR)
+   *   quote→base:  sell * FS * DR / (mid * DF)
+   *   where DF = max(1, 10^diff), DR = max(1, 10^(-diff)), diff = quoteDecimals - baseDecimals
    */
   private async scorePair(pair: CowPair): Promise<CowPair | null> {
     const pool = this.oracle.resolvePool(
@@ -505,13 +504,18 @@ class SolverA {
     const mid = await this.oracle.getMidPrice(pool.poolKey);
     const FS = CONFIG.FLOAT_SCALING;
 
-    const payoutToA = pool.isBaseToQuote
-      ? (pair.intentA.sellAmount * mid) / FS
-      : (pair.intentA.sellAmount * FS) / mid;
+    // intentA sells base/quote → gets quote/base (pool direction for A)
+    const payoutToA = applyDecimalFactor(pool, pair.intentA.sellAmount, mid, FS);
+    // intentB is inverse: if pool.isBaseToQuote, B sells quote and gets base
+    const poolInv = { ...pool, isBaseToQuote: !pool.isBaseToQuote };
+    const payoutToB = applyDecimalFactor(poolInv, pair.intentB.sellAmount, mid, FS);
 
-    const payoutToB = pool.isBaseToQuote
-      ? (pair.intentB.sellAmount * FS) / mid
-      : (pair.intentB.sellAmount * mid) / FS;
+    console.log(
+      `[scorePair] ${shortType(pair.intentA.sellType)}→${shortType(pair.intentA.buyType)} ` +
+        `mid=${mid} DF=10^${pool.quoteDecimals - pool.baseDecimals} ` +
+        `payoutToA=${payoutToA} (min ${pair.intentA.minAmountOut}) ` +
+        `payoutToB=${payoutToB} (min ${pair.intentB.minAmountOut})`,
+    );
 
     if (
       payoutToA < pair.intentA.minAmountOut ||
@@ -561,18 +565,9 @@ class SolverA {
 
   // ─── Commit ────────────────────────────────────────────────────────────────
 
-  private async submitCommit(solution: BatchSolution): Promise<void> {
-    const executor = new SerialTransactionExecutor({
-      client: this.suiClient,
-      signer: this.keypair,
-    });
-
+  private buildCommitTx(solution: BatchSolution): Transaction {
     const tx = new Transaction();
-
-    // Split bond from gas coin
     const [bond] = tx.splitCoins(tx.gas, [tx.pure.u64(CONFIG.MIN_BOND_MIST)]);
-
-    // commit(config, state, score, bond, clock)
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::commit`,
       arguments: [
@@ -583,9 +578,20 @@ class SolverA {
         tx.object.clock(),
       ],
     });
+    return tx;
+  }
+
+  private async submitCommit(
+    solution: BatchSolution,
+    attempt = 0,
+  ): Promise<void> {
+    const MAX_RETRIES = 3;
 
     try {
-      const result = await executor.executeTransaction(tx, { effects: true });
+      const result = await this.executor.executeTransaction(
+        this.buildCommitTx(solution),
+        { effects: true },
+      );
 
       if (result.$kind === "FailedTransaction") {
         console.error(
@@ -599,6 +605,18 @@ class SolverA {
         );
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Coin version conflict — retry with fresh executor
+      if (
+        attempt < MAX_RETRIES &&
+        msg.includes("not available for consumption")
+      ) {
+        console.warn(
+          `[SolverA] Commit coin conflict #${solution.batchId} — retry ${attempt + 1}/${MAX_RETRIES}`,
+        );
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        return this.submitCommit(solution, attempt + 1);
+      }
       console.error(`[SolverA] Commit error #${solution.batchId}:`, err);
       this.activeSolution = null;
     }
@@ -624,49 +642,44 @@ class SolverA {
   private async executeSettlement(solution: BatchSolution): Promise<void> {
     const tx = new Transaction();
 
-    // Cache live prices for this PTB build
-    const priceCache = new Map<string, bigint>();
-    const getPrice = async (poolKey: string): Promise<bigint> => {
-      if (!priceCache.has(poolKey)) {
-        priceCache.set(poolKey, await this.oracle.getMidPrice(poolKey));
-      }
-      return priceCache.get(poolKey)!;
+    // Deduplicate tx.object() refs — each unique objectId must appear only ONCE
+    // as an input in the PTB.  Calling tx.object(sameId) twice creates duplicate
+    // inputs which Sui rejects as "mutable object appears more than once".
+    const objRefs = new Map<string, ReturnType<typeof tx.object>>();
+    const getRef = (id: string) => {
+      if (!objRefs.has(id)) objRefs.set(id, tx.object(id));
+      return objRefs.get(id)!;
     };
 
     // 1. open_settlement(state, clock) → ticket
     const openResult = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::open_settlement`,
-      arguments: [tx.object(solution.auctionStateId), tx.object.clock()],
+      arguments: [getRef(solution.auctionStateId), tx.object.clock()],
     });
     const ticket = openResult[0]!;
 
     // 2. Process CoW pairs
     for (const pair of solution.cowPairs) {
-      await this.addCowPairCalls(tx, ticket, pair, getPrice);
+      await this.addCowPairCalls(tx, ticket, pair, getRef);
     }
 
-    // 3. Process AMM routes (zero inventory — swap output chaining)
+    // 3. Process AMM routes
     for (const route of solution.ammRoutes) {
-      await this.addAmmRouteCalls(tx, ticket, route);
+      await this.addAmmRouteCalls(tx, ticket, route, getRef);
     }
 
     // 4. close_settlement(state, ticket, config)
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::close_settlement`,
       arguments: [
-        tx.object(solution.auctionStateId),
+        getRef(solution.auctionStateId),
         ticket,
-        tx.object(CONFIG.GLOBAL_CONFIG_ID),
+        getRef(CONFIG.GLOBAL_CONFIG_ID),
       ],
     });
 
-    const executor = new SerialTransactionExecutor({
-      client: this.suiClient,
-      signer: this.keypair,
-    });
-
     try {
-      const result = await executor.executeTransaction(tx, {
+      const result = await this.executor.executeTransaction(tx, {
         effects: true,
         events: true,
       });
@@ -681,9 +694,18 @@ class SolverA {
           `[SolverA] Settlement SUCCESS #${solution.batchId} digest=${result.Transaction.digest}`,
         );
         this.cleanupBatch(solution);
+        return; // cleanupBatch already clears activeSolution
       }
     } catch (err) {
       console.error(`[SolverA] Settlement error #${solution.batchId}:`, err);
+    } finally {
+      // Always release the lock so future batches are not skipped.
+      // cleanupBatch() on the success path already does this — the finally
+      // block only fires for failure paths (FailedTransaction / throw).
+      if (this.activeSolution?.batchId === solution.batchId) {
+        this.activeSolution = null;
+        this.coinCache.clear();
+      }
     }
   }
 
@@ -691,14 +713,16 @@ class SolverA {
    * Adds PTB calls for a CoW pair.
    * Solver provides payout coins from its own inventory via splitCoins.
    *
-   * Note: process_intent<SellCoin, BuyCoin> requires pool: Pool<SellCoin, BuyCoin>.
-   * The pool object ID must match the type parameters exactly.
+   * IMPORTANT: Both intents in a DEEP/SUI CoW pair resolve to the same DeepBook
+   * pool (DEEP_SUI).  We must use getRef() so the pool appears only once as a
+   * PTB input — calling tx.object(sameId) twice causes:
+   *   "Mutable object cannot appear more than once in one transaction"
    */
   private async addCowPairCalls(
     tx: Transaction,
     ticket: ReturnType<Transaction["moveCall"]>[number],
     pair: CowPair,
-    getPrice: (k: string) => Promise<bigint>,
+    getRef: (id: string) => ReturnType<typeof tx.object>,
   ): Promise<void> {
     const { intentA, intentB } = pair;
     if (!intentA.sharedRef || !intentB.sharedRef) {
@@ -713,27 +737,12 @@ class SolverA {
       return;
     }
 
-    const midA = await getPrice(poolA.poolKey);
-    const FS = CONFIG.FLOAT_SCALING;
-
-    const payoutToA = poolA.isBaseToQuote
-      ? (intentA.sellAmount * midA) / FS
-      : (intentA.sellAmount * FS) / midA;
-    const payoutToB = poolA.isBaseToQuote
-      ? (intentB.sellAmount * FS) / midA
-      : (intentB.sellAmount * midA) / FS;
-
-    if (payoutToA < intentA.minAmountOut || payoutToB < intentB.minAmountOut) {
-      console.warn(`[SolverA] CoW pair stale at execution price — skipped`);
-      return;
-    }
-
     const poolIdForA = this.resolveDeepBookPoolId(poolA.poolKey);
     const poolIdForB = this.resolveDeepBookPoolId(poolB.poolKey);
 
-    // Payout to intentA (intentA wants intentA.buyType)
-    const solverCoinForA = tx.object(await this.getSolverCoin(intentA.buyType));
-    const [coinForA] = tx.splitCoins(solverCoinForA, [tx.pure.u64(payoutToA)]);
+    // Solver coin refs — deduplicated so same coinType object isn't added twice
+    const coinARef = getRef(await this.getSolverCoin(intentA.buyType));
+    const [coinForA] = tx.splitCoins(coinARef, [tx.pure.u64(pair.payoutToA)]);
 
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
@@ -748,14 +757,13 @@ class SolverA {
           }),
         ),
         coinForA,
-        tx.object(poolIdForA),
+        getRef(poolIdForA),  // dedup — same pool used by both intents
         tx.object.clock(),
       ],
     });
 
-    // Payout to intentB (intentB wants intentB.buyType)
-    const solverCoinForB = tx.object(await this.getSolverCoin(intentB.buyType));
-    const [coinForB] = tx.splitCoins(solverCoinForB, [tx.pure.u64(payoutToB)]);
+    const coinBRef = getRef(await this.getSolverCoin(intentB.buyType));
+    const [coinForB] = tx.splitCoins(coinBRef, [tx.pure.u64(pair.payoutToB)]);
 
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
@@ -770,7 +778,7 @@ class SolverA {
           }),
         ),
         coinForB,
-        tx.object(poolIdForB),
+        getRef(poolIdForB),  // dedup
         tx.object.clock(),
       ],
     });
@@ -790,6 +798,7 @@ class SolverA {
     tx: Transaction,
     ticket: ReturnType<Transaction["moveCall"]>[number],
     route: AmmRoute,
+    getRef: (id: string) => ReturnType<typeof tx.object>,
   ): Promise<void> {
     const { intent, poolKey, isBaseToQuote } = route;
     if (!intent.sharedRef) {
@@ -799,40 +808,35 @@ class SolverA {
       return;
     }
 
+    const pool = this.oracle.resolvePool(intent.sellType, intent.buyType)!;
     const poolId = this.resolveDeepBookPoolId(poolKey);
-    const sellFloat = Number(intent.sellAmount) / 1e9;
-    const minOutFloat = Number(intent.minAmountOut) / 1e9;
+    const sellFloat = Number(intent.sellAmount) / 10 ** (isBaseToQuote ? pool.baseDecimals : pool.quoteDecimals);
+    const minOutFloat = Number(intent.minAmountOut) / 10 ** (isBaseToQuote ? pool.quoteDecimals : pool.baseDecimals);
 
     let buyOutRef: any;
 
     if (isBaseToQuote) {
-      // User sells base (e.g. SUI), wants quote (e.g. USDC)
       const [baseCoin] = tx.splitCoins(
-        tx.object(await this.getSolverCoin(intent.sellType)),
+        getRef(await this.getSolverCoin(intent.sellType)),
         [tx.pure.u64(intent.sellAmount)],
       );
-
-      const swapResult = tx.add(
+      const [baseOut2, quoteOut, deepOut] = tx.add(
         this.dbClient.deepBook.swapExactBaseForQuote({
           poolKey,
           amount: sellFloat,
           deepAmount: 0,
           minOut: minOutFloat,
-          baseCoin: baseCoin,
+          baseCoin,
         }),
       );
-      const [baseOut2, quoteOut, deepOut] = swapResult;
-      // Return unused base and DEEP to solver
       tx.transferObjects([baseOut2, deepOut], this.address);
       buyOutRef = quoteOut;
     } else {
-      // User sells quote (e.g. USDC), wants base (e.g. SUI)
       const [quoteCoin] = tx.splitCoins(
-        tx.object(await this.getSolverCoin(intent.sellType)),
+        getRef(await this.getSolverCoin(intent.sellType)),
         [tx.pure.u64(intent.sellAmount)],
       );
-
-      const swapResult = tx.add(
+      const [baseOut, quoteOut2, deepOut] = tx.add(
         this.dbClient.deepBook.swapExactQuoteForBase({
           poolKey,
           amount: sellFloat,
@@ -841,13 +845,10 @@ class SolverA {
           quoteCoin: quoteCoin as any,
         }),
       );
-      const [baseOut, quoteOut2, deepOut] = swapResult;
       tx.transferObjects([quoteOut2, deepOut], this.address);
       buyOutRef = baseOut;
     }
 
-    // process_intent<SellCoin, BuyCoin>(ticket, intent, buyOut, pool, clock)
-    // swap output flows DIRECTLY into process_intent — zero intermediate transfer
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intent.sellType, intent.buyType],
@@ -861,7 +862,7 @@ class SolverA {
           }),
         ),
         buyOutRef,
-        tx.object(poolId),
+        getRef(poolId),  // dedup
         tx.object.clock(),
       ],
     });
@@ -909,12 +910,7 @@ class SolverA {
       arguments: [tx.object(auctionStateId)],
     });
 
-    const executor = new SerialTransactionExecutor({
-      client: this.suiClient,
-      signer: this.keypair,
-    });
-
-    const result = await executor.executeTransaction(tx, { effects: true });
+    const result = await this.executor.executeTransaction(tx, { effects: true });
 
     if (result.$kind === "FailedTransaction") {
       throw new Error(
@@ -1008,6 +1004,44 @@ class SolverA {
 }
 
 // ─── Pure Utils ───────────────────────────────────────────────────────────────
+
+/**
+ * Convert `sellAmount` (in sell-token raw units) → buy-token raw units using
+ * a DeepBook mid-price scaled by FLOAT_SCALING, with decimal correction.
+ *
+ *   diff = quoteDecimals − baseDecimals
+ *   DF   = 10^max(diff, 0)   (mul numerator when quote has more decimals)
+ *   DR   = 10^max(-diff, 0)  (mul denominator when base has more decimals)
+ *
+ *   base→quote:  sellAmount × mid × DF / (FS × DR)
+ *   quote→base:  sellAmount × FS × DR / (mid × DF)
+ */
+function applyDecimalFactor(
+  pool: { isBaseToQuote: boolean; baseDecimals: number; quoteDecimals: number },
+  sellAmount: bigint,
+  mid: bigint,
+  FS: bigint,
+): bigint {
+  const diff = pool.quoteDecimals - pool.baseDecimals;
+  const DF = diff >= 0 ? 10n ** BigInt(diff) : 1n;
+  const DR = diff < 0 ? 10n ** BigInt(-diff) : 1n;
+  if (pool.isBaseToQuote) {
+    // sell base, get quote
+    return (sellAmount * mid * DF) / (FS * DR);
+  } else {
+    // sell quote, get base
+    return (sellAmount * FS * DR) / (mid * DF);
+  }
+}
+
+/** Ensure a Sui struct type has a 0x-prefixed address segment. */
+function normalizeType(t: string): string {
+  // e.g. "36dbef...::deep::DEEP" → "0x36dbef...::deep::DEEP"
+  // but "0x2::sui::SUI" is already fine
+  return t.replace(/^([^:]+)::/, (_, addr) =>
+    addr.startsWith("0x") ? `${addr}::` : `0x${addr}::`,
+  );
+}
 
 function shortType(t: string): string {
   const parts = t.split("::");
