@@ -10,15 +10,15 @@ const MAX_PROTOCOL_FEE_BPS: u64 = 10_000;
 
 // === Default Configuration Parameters ===
 
-const DEFAULT_MIN_BOND: u64 = 1_000_000_000; // 1 SUI
-const DEFAULT_COMMIT_DURATION_MS: u64 = 2000; // 2 seconds
-const DEFAULT_GRACE_PERIOD_MS: u64 = 5000; // 5 seconds
+const DEFAULT_MIN_BOND: u64 = 1_000; // 0.000001 SUI
+const DEFAULT_COMMIT_DURATION_MS: u64 = 15000; // 15 seconds
+const DEFAULT_GRACE_PERIOD_MS: u64 = 60000; // 60 seconds
 const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
 const DEFAULT_SCORE_TOLERANCE_BPS: u64 = 9_500; // 95% — tolerance for mid_price drift between commit and execute
 
 // === Upper Bounds (Overflow Protection) ===
 
-const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1 trillion base units (~max reasonable bond)
+const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1000 SUI
 const MAX_COMMIT_DURATION_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_GRACE_PERIOD_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_SCORE_TOLERANCE_BPS: u64 = 10_000; // 100% — tolerance cannot exceed full score
