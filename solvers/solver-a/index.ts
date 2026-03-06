@@ -831,29 +831,34 @@ class SolverA {
         );
     console.debug(`[CoW] loanCoinB: ${loanCoinB ? 'OK' : 'UNDEFINED'}, floanB: ${floanB ? 'OK' : 'UNDEFINED'}`);
 
-    // 2. process_intent<SellA, BuyA> → sellCoinA (payout transferred to ownerA by contract)
+    // 2. process_intent<SellA, BuyA, Base, Quote> → sellCoinA (payout transferred to ownerA by contract)
+    // Determine Base and Quote types based on pool direction
+    const baseType = isBaseToQuote ? intentA.sellType : intentA.buyType;
+    const quoteType = isBaseToQuote ? intentA.buyType : intentA.sellType;
     const [sellCoinA] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intentA.sellType, intentA.buyType],
+      typeArguments: [intentA.sellType, intentA.buyType, baseType, quoteType],
       arguments: [
         ticket,
         tx.object(intentA.intentId), // SDK auto-resolves shared object version
         loanCoinA!,
         tx.object(poolId),
+        tx.pure.bool(isBaseToQuote),
         tx.object.clock(),
       ],
     });
     console.debug(`[CoW] sellCoinA: ${sellCoinA ? 'OK' : 'UNDEFINED'}`);
 
-    // 3. process_intent<SellB, BuyB> → sellCoinB (payout transferred to ownerB by contract)
+    // 3. process_intent<SellB, BuyB, Base, Quote> → sellCoinB (payout transferred to ownerB by contract)
     const [sellCoinB] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intentB.sellType, intentB.buyType],
+      typeArguments: [intentB.sellType, intentB.buyType, baseType, quoteType],
       arguments: [
         ticket,
         tx.object(intentB.intentId), // SDK auto-resolves shared object version
         loanCoinB!,
         tx.object(poolId),
+        tx.pure.bool(isBaseToQuote),
         tx.object.clock(),
       ],
     });
@@ -974,15 +979,19 @@ class SolverA {
           ),
         );
 
-    // 2. process_intent → sellCoin (contract transfers payout directly to intent owner)
+    // 2. process_intent<SellCoin, BuyCoin, Base, Quote> → sellCoin (contract transfers payout directly to intent owner)
+    // Determine Base and Quote types based on pool direction
+    const baseType = isBaseToQuote ? intent.sellType : intent.buyType;
+    const quoteType = isBaseToQuote ? intent.buyType : intent.sellType;
     const [sellCoin] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intent.sellType, intent.buyType],
+      typeArguments: [intent.sellType, intent.buyType, baseType, quoteType],
       arguments: [
         ticket,
         tx.object(intent.intentId), // SDK auto-resolves shared object version
         loanCoin!,
         tx.object(poolId),
+        tx.pure.bool(isBaseToQuote),
         tx.object.clock(),
       ],
     });
