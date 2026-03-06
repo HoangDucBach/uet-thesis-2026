@@ -21,6 +21,7 @@ const EScoreMismatch: u64 = 4;
 const EInvalidDeadline: u64 = 5;
 const EWrongBatch: u64 = 6;
 const EDuplicateCommit: u64 = 7;
+const EIncompleteBatch: u64 = 8;
 
 // === Enums ===
 
@@ -34,7 +35,7 @@ public enum AuctionPhase has copy, drop, store {
 
 // === Structs ===
 
-/// Global batch counter state — shared object for auto-incrementing batch IDs.
+/// Global batch counter state.
 /// * `id`: Unique object ID.
 /// * `next_batch_id`: Counter for next batch (starts at 0).
 public struct BatchRegistry has key {
@@ -44,15 +45,16 @@ public struct BatchRegistry has key {
 
 /// Hot Potato — no abilities. Forces completion of settlement.
 /// Must be consumed by close_settlement() or PTB validation fails.
-/// Tracks actual surplus (in BuyCoin units) delivered across all processed intents.
 ///
 /// * `batch_id`: Batch this ticket is for.
 /// * `committed_score`: Winner's committed surplus estimate (in USDC-scaled units).
 /// * `actual_surplus`: Accumulated surplus per process_intent() call.
+/// * `processed_count`: Number of intents processed so far.
 public struct SettlementTicket {
     batch_id: u64,
     committed_score: u64,
     actual_surplus: u64,
+    processed_count: u64,
 }
 
 /// Commitment entry for a solver in commit phase.
@@ -131,7 +133,7 @@ public struct FallbackTriggeredEvent has copy, drop {
 
 // === Functions ===
 
-/// Initialize global batch counter (call once during deployment).
+/// Initialize global batch counter.
 fun init(ctx: &mut TxContext) {
     transfer::share_object(BatchRegistry {
         id: object::new(ctx),
@@ -159,7 +161,7 @@ entry fun open_batch_and_share(
 
 /// Open a new batch auction with auto-generated batch ID.
 ///
-/// * `batch_state`: Global batch counter state (auto-increments).
+/// * `batch_state`: Global batch counter state.
 /// * `config`: GlobalConfig for protocol parameters.
 /// * `intent_ids`: Vector of Intent IDs in this batch.
 /// * `clock`: Sui clock.
@@ -305,28 +307,24 @@ public fun open_settlement(
         batch_id: state.batch_id,
         committed_score: state.winner_score,
         actual_surplus: 0,
+        processed_count: 0,
     }
 }
 
 /// Process a single CoW pair intent.
-/// Returns the payout coin (for user/owner), the sell coin (for solver), and the intent owner address.
-/// The caller is responsible for handling the returned coins (transfer, merge, etc.).
 ///
-/// * `ticket`: SettlementTicket (must be mutable to increment counter).
+/// * `ticket`: SettlementTicket (mutable — increments processed_count and actual_surplus).
 /// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
-/// * `payout`: Solver's payout coin of type BuyCoin (from any source: flash, inventory).
-/// * `pool`: DeepBook pool for on-chain price verification (immutable).
+/// * `payout`: Solver's payout coin of type BuyCoin.
+/// * `pool`: DeepBook pool for on-chain price verification.
 /// * `clock`: Sui clock for DeepBook mid_price calculation.
 /// * `ctx`: Transaction context.
 ///
 /// Type Parameters:
-/// * `SellCoin`: Coin type user was selling (user input locked in Intent).
-/// * `BuyCoin`: Coin type user is receiving (payout coin provided by solver).
+/// * `SellCoin`: Coin type user was selling.
+/// * `BuyCoin`: Coin type user is receiving.
 ///
-/// Returns: `(Coin<BuyCoin>, Coin<SellCoin>, address)`
-/// * `Coin<BuyCoin>` — payout to deliver to the intent owner.
-/// * `Coin<SellCoin>` — sell coin released from the intent (typically routed to solver).
-/// * `address`       — intent owner address.
+/// Returns: `Coin<SellCoin>` — sell coin released from the intent for solver.
 public fun process_intent<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
     intent: Intent<SellCoin, BuyCoin>,
@@ -334,7 +332,7 @@ public fun process_intent<SellCoin, BuyCoin>(
     pool: &DeepbookPool<SellCoin, BuyCoin>,
     clock: &Clock,
     ctx: &mut TxContext,
-): (Coin<BuyCoin>, Coin<SellCoin>, address) {
+): Coin<SellCoin> {
     let intent_batch_id = intent_book::batch_id(&intent);
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
@@ -357,28 +355,29 @@ public fun process_intent<SellCoin, BuyCoin>(
     // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
+    ticket.processed_count = ticket.processed_count + 1;
 
-    // 4. Return coins
-    (payout, sell_balance.into_coin(ctx), owner)
+    // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
+    transfer::public_transfer(payout, owner);
+
+    // 5. Return sell coin to solver for flashloan repayment / swap
+    sell_balance.into_coin(ctx)
 }
 
 /// Process a partial fill for a partial_fillable intent.
 /// Intent is mutated but NOT deleted — it stays on-chain.
-/// Returns the payout coin (for user/owner), the partial sell coin (for solver), and the intent owner address.
-/// The caller is responsible for handling the returned coins (transfer, merge, etc.).
+/// Protocol directly transfers the payout to the intent owner — solver cannot intercept.
+/// Returns only the partial sell coin for the solver to route.
 ///
-/// * `ticket`: SettlementTicket (mutable, increments actual_cow_pairs).
-/// * `intent`: &mut Intent (shared object, stays alive after call).
+/// * `ticket`: SettlementTicket.
+/// * `intent`: &mut Intent.
 /// * `fill_amount`: SellCoin units to fill this round.
 /// * `payout`: Solver's payout of BuyCoin for this partial fill.
 /// * `pool`: DeepBook pool for reference price floor.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `(Coin<BuyCoin>, Coin<SellCoin>, address)`
-/// * `Coin<BuyCoin>` — payout to deliver to the intent owner.
-/// * `Coin<SellCoin>` — partial sell coin released from the intent (typically routed to solver).
-/// * `address`       — intent owner address.
+/// Returns: `Coin<SellCoin>` — partial sell coin released from the intent for solver.
 public fun process_intent_partial<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
     intent: &mut Intent<SellCoin, BuyCoin>,
@@ -387,7 +386,7 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     pool: &DeepbookPool<SellCoin, BuyCoin>,
     clock: &Clock,
     ctx: &mut TxContext,
-): (Coin<BuyCoin>, Coin<SellCoin>, address) {
+): Coin<SellCoin> {
     let intent_batch_id = intent_book::batch_id(intent);
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
@@ -412,9 +411,13 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
+    ticket.processed_count = ticket.processed_count + 1;
 
-    // 4. Return coins to caller — no forced transfer
-    (payout, partial_sell_balance.into_coin(ctx), owner)
+    // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
+    transfer::public_transfer(payout, owner);
+
+    // 5. Return partial sell coin to solver for flashloan repayment / swap
+    partial_sell_balance.into_coin(ctx)
 }
 
 /// Close settlement — consume Hot Potato, verify score, return winner bond.
@@ -435,9 +438,13 @@ public fun close_settlement(
         batch_id,
         committed_score,
         actual_surplus,
+        processed_count,
     } = ticket;
 
     assert!(batch_id == state.batch_id, EWrongBatch);
+
+    // Enforce that every intent in the batch was processed
+    assert!(processed_count == vector::length(&state.intent_ids), EIncompleteBatch);
 
     // Verify actual surplus >= score_tolerance_bps% of committed score.
     let threshold =
@@ -463,7 +470,6 @@ public fun close_settlement(
 }
 
 /// Trigger fallback if winner fails to execute within grace period.
-/// Slashes winner bond (transferred to caller as reward for triggering fallback).
 ///
 /// * `state`: AuctionState.
 /// * `clock`: Sui clock.
@@ -555,6 +561,11 @@ public fun ticket_actual_surplus(ticket: &SettlementTicket): u64 {
     ticket.actual_surplus
 }
 
+/// Get ticket's processed intent count.
+public fun ticket_processed_count(ticket: &SettlementTicket): u64 {
+    ticket.processed_count
+}
+
 public fun is_commit_phase(state: &AuctionState): bool {
     state.phase == AuctionPhase::Commit
 }
@@ -600,7 +611,7 @@ public fun destroy_batch_state_for_testing(state: BatchRegistry) {
 
 #[test_only]
 public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {
-    SettlementTicket { batch_id, committed_score, actual_surplus: 0 }
+    SettlementTicket { batch_id, committed_score, actual_surplus: 0, processed_count: 0 }
 }
 
 #[test_only]
