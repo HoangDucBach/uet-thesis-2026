@@ -1,10 +1,9 @@
 module cow_dex::intent_book;
 
-use std::option;
 use std::type_name::{Self, TypeName};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
-use sui::coin::{Self, Coin};
+use sui::coin::Coin;
 use sui::event::emit;
 
 // === Errors ===

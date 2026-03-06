@@ -20,7 +20,6 @@ const ECLEARING_PRICE_MISMATCH: u64 = 2;
 const ENOT_WINNER: u64 = 3;
 const ESCORE_MISMATCH: u64 = 4;
 const EINVALID_DEADLINE: u64 = 5;
-const EWRONG_BATCH: u64 = 6;
 const EDUPLICATE_COMMIT: u64 = 7;
 
 // ─── Tests: open_batch ─────────────────────────────────────────────────────
@@ -116,7 +115,7 @@ fun test_commit_insufficient_bond_aborts() {
         &config,
         &mut state,
         5,
-        coin::mint_for_testing<SUI>(999_999_999, &mut ctx),
+        coin::mint_for_testing<SUI>(999, &mut ctx),
         &clock,
         &ctx,
     );
@@ -144,7 +143,7 @@ fun test_commit_after_deadline_aborts() {
         &mut ctx,
     );
 
-    clock::set_for_testing(&mut clock, 3000);
+    clock::set_for_testing(&mut clock, 15001);
     settlement::commit(
         &config,
         &mut state,
@@ -269,7 +268,7 @@ fun test_winner_selection_higher_score_wins() {
         let mut state = ts::take_shared<AuctionState>(&scenario);
         let ctx = ts::ctx(&mut scenario);
         let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 2001);
+        clock::set_for_testing(&mut clock, 15001);
         settlement::close_commits(&mut state, &clock);
 
         assert!(*std::option::borrow(&settlement::winner(&state)) == winner);
@@ -348,7 +347,7 @@ fun test_winner_tiebreak_earlier_timestamp_wins() {
         let mut state = ts::take_shared<AuctionState>(&scenario);
         let ctx = ts::ctx(&mut scenario);
         let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 2001);
+        clock::set_for_testing(&mut clock, 15001);
         settlement::close_commits(&mut state, &clock);
         assert!(*std::option::borrow(&settlement::winner(&state)) == first);
         clock::destroy_for_testing(clock);
@@ -425,7 +424,7 @@ fun test_open_settlement_non_winner_aborts() {
             &clock,
             ctx,
         );
-        clock::set_for_testing(&mut clock, 2001);
+        clock::set_for_testing(&mut clock, 15001);
         settlement::close_commits(&mut state, &clock);
         clock::destroy_for_testing(clock);
         ts::return_shared(config);
@@ -437,7 +436,7 @@ fun test_open_settlement_non_winner_aborts() {
         let mut state = ts::take_shared<AuctionState>(&scenario);
         let ctx = ts::ctx(&mut scenario);
         let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 3000);
+        clock::set_for_testing(&mut clock, 15001);
         let ticket = settlement::open_settlement(&mut state, &clock, ctx);
         clock::destroy_for_testing(clock);
         settlement::destroy_ticket_for_testing(ticket);
@@ -476,10 +475,10 @@ fun test_close_settlement_score_mismatch_aborts() {
         &ctx,
     );
 
-    clock::set_for_testing(&mut clock, 2001);
+    clock::set_for_testing(&mut clock, 15001);
     settlement::close_commits(&mut state, &clock);
 
-    clock::set_for_testing(&mut clock, 3000);
+    clock::set_for_testing(&mut clock, 15001);
     let ticket = settlement::open_settlement(&mut state, &clock, &ctx);
 
     settlement::close_settlement(&mut state, ticket, &config, &mut ctx);
@@ -518,10 +517,10 @@ fun test_trigger_fallback_before_deadline_aborts() {
         &clock,
         &ctx,
     );
-    clock::set_for_testing(&mut clock, 2001);
+    clock::set_for_testing(&mut clock, 15001);
     settlement::close_commits(&mut state, &clock);
 
-    clock::set_for_testing(&mut clock, 6999);
+    clock::set_for_testing(&mut clock, 74999);
     settlement::trigger_fallback(&mut state, &clock, &mut ctx);
 
     clock::destroy_for_testing(clock);
@@ -555,10 +554,10 @@ fun test_trigger_fallback_after_deadline_slashes_bond() {
         &clock,
         &ctx,
     );
-    clock::set_for_testing(&mut clock, 2001);
+    clock::set_for_testing(&mut clock, 15001);
     settlement::close_commits(&mut state, &clock);
 
-    clock::set_for_testing(&mut clock, 7001);
+    clock::set_for_testing(&mut clock, 75001);
     settlement::trigger_fallback(&mut state, &clock, &mut ctx);
 
     assert!(settlement::is_failed_phase(&state));
@@ -670,13 +669,13 @@ fun test_claim_refund_loser_after_done() {
     ts::next_tx(&mut scenario, winner);
     {
         let mut state = ts::take_shared<AuctionState>(&scenario);
+        let config = ts::take_shared<config::GlobalConfig>(&scenario);
         let ctx = ts::ctx(&mut scenario);
         let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 2001);
+        clock::set_for_testing(&mut clock, 15001);
         settlement::close_commits(&mut state, &clock);
-        clock::set_for_testing(&mut clock, 3000);
+        clock::set_for_testing(&mut clock, 15001);
 
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
         let ticket = settlement::open_settlement(&mut state, &clock, ctx);
         settlement::close_settlement(&mut state, ticket, &config, ctx);
         ts::return_shared(config);

@@ -309,6 +309,8 @@ public fun open_settlement(
 }
 
 /// Process a single CoW pair intent.
+/// Returns the payout coin (for user/owner), the sell coin (for solver), and the intent owner address.
+/// The caller is responsible for handling the returned coins (transfer, merge, etc.).
 ///
 /// * `ticket`: SettlementTicket (must be mutable to increment counter).
 /// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
@@ -320,7 +322,11 @@ public fun open_settlement(
 /// Type Parameters:
 /// * `SellCoin`: Coin type user was selling (user input locked in Intent).
 /// * `BuyCoin`: Coin type user is receiving (payout coin provided by solver).
-#[allow(lint(self_transfer))]
+///
+/// Returns: `(Coin<BuyCoin>, Coin<SellCoin>, address)`
+/// * `Coin<BuyCoin>` — payout to deliver to the intent owner.
+/// * `Coin<SellCoin>` — sell coin released from the intent (typically routed to solver).
+/// * `address`       — intent owner address.
 public fun process_intent<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
     intent: Intent<SellCoin, BuyCoin>,
@@ -328,17 +334,16 @@ public fun process_intent<SellCoin, BuyCoin>(
     pool: &DeepbookPool<SellCoin, BuyCoin>,
     clock: &Clock,
     ctx: &mut TxContext,
-) {
-    // 1. Verify intent belongs to this batch
+): (Coin<BuyCoin>, Coin<SellCoin>, address) {
     let intent_batch_id = intent_book::batch_id(&intent);
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
-    // 2. Consume intent
+    // 1. Consume intent
     let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
     let sell_amount = sell_balance.value();
 
-    // 3. Calculate price floor via DeepBook mid_price
+    // 2. Calculate price floor via DeepBook mid_price
     let mid_price = pool.mid_price(clock);
     let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / math::float_scaling();
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
@@ -349,17 +354,18 @@ public fun process_intent<SellCoin, BuyCoin>(
     let slippage_protection = (slippage_u128 as u64);
     let price_floor = math::max_u64_val(min_amount_out, slippage_protection);
 
-    // 4. Verify payout >= price floor and accumulate surplus
+    // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 5. Settle
-    transfer::public_transfer(payout, owner);
-    transfer::public_transfer(sell_balance.into_coin(ctx), ctx.sender());
+    // 4. Return coins
+    (payout, sell_balance.into_coin(ctx), owner)
 }
 
 /// Process a partial fill for a partial_fillable intent.
 /// Intent is mutated but NOT deleted — it stays on-chain.
+/// Returns the payout coin (for user/owner), the partial sell coin (for solver), and the intent owner address.
+/// The caller is responsible for handling the returned coins (transfer, merge, etc.).
 ///
 /// * `ticket`: SettlementTicket (mutable, increments actual_cow_pairs).
 /// * `intent`: &mut Intent (shared object, stays alive after call).
@@ -368,7 +374,11 @@ public fun process_intent<SellCoin, BuyCoin>(
 /// * `pool`: DeepBook pool for reference price floor.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
-#[allow(lint(self_transfer))]
+///
+/// Returns: `(Coin<BuyCoin>, Coin<SellCoin>, address)`
+/// * `Coin<BuyCoin>` — payout to deliver to the intent owner.
+/// * `Coin<SellCoin>` — partial sell coin released from the intent (typically routed to solver).
+/// * `address`       — intent owner address.
 public fun process_intent_partial<SellCoin, BuyCoin>(
     ticket: &mut SettlementTicket,
     intent: &mut Intent<SellCoin, BuyCoin>,
@@ -377,19 +387,18 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     pool: &DeepbookPool<SellCoin, BuyCoin>,
     clock: &Clock,
     ctx: &mut TxContext,
-) {
-    // 1. Verify intent belongs to this batch
+): (Coin<BuyCoin>, Coin<SellCoin>, address) {
     let intent_batch_id = intent_book::batch_id(intent);
     assert!(intent_batch_id.is_some(), EWrongBatch);
     assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
 
-    // 2. Split fill_amount from intent
+    // 1. Split fill_amount from intent
     let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
         fill_amount,
     );
 
-    // 3. Calculate price floor via DeepBook mid_price
+    // 2. Calculate price floor via DeepBook mid_price
     let mid_price = pool.mid_price(clock);
     let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / math::float_scaling();
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
@@ -400,13 +409,12 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     let slippage_protection = (slippage_u128 as u64);
     let price_floor = math::max_u64_val(proportional_min_out, slippage_protection);
 
-    // 4. Verify payout >= price floor and accumulate surplus
+    // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 5. Settle
-    transfer::public_transfer(payout, owner);
-    transfer::public_transfer(partial_sell_balance.into_coin(ctx), ctx.sender());
+    // 4. Return coins to caller — no forced transfer
+    (payout, partial_sell_balance.into_coin(ctx), owner)
 }
 
 /// Close settlement — consume Hot Potato, verify score, return winner bond.
