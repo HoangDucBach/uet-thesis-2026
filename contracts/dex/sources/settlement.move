@@ -316,20 +316,24 @@ public fun open_settlement(
 /// * `ticket`: SettlementTicket (mutable — increments processed_count and actual_surplus).
 /// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
 /// * `payout`: Solver's payout coin of type BuyCoin.
-/// * `pool`: DeepBook pool for on-chain price verification.
+/// * `pool`: DeepBook pool (Base, Quote order — may be reversed relative to intent).
+/// * `is_base_to_quote`: true if pool's base matches SellCoin direction.
 /// * `clock`: Sui clock for DeepBook mid_price calculation.
 /// * `ctx`: Transaction context.
 ///
 /// Type Parameters:
 /// * `SellCoin`: Coin type user was selling.
 /// * `BuyCoin`: Coin type user is receiving.
+/// * `Base`: Pool's base coin type.
+/// * `Quote`: Pool's quote coin type.
 ///
 /// Returns: `Coin<SellCoin>` — sell coin released from the intent for solver.
-public fun process_intent<SellCoin, BuyCoin>(
+public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: Intent<SellCoin, BuyCoin>,
     payout: Coin<BuyCoin>,
-    pool: &DeepbookPool<SellCoin, BuyCoin>,
+    pool: &DeepbookPool<Base, Quote>,
+    is_base_to_quote: bool,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SellCoin> {
@@ -342,8 +346,19 @@ public fun process_intent<SellCoin, BuyCoin>(
     let sell_amount = sell_balance.value();
 
     // 2. Calculate price floor via DeepBook mid_price
-    let mid_price = pool.mid_price(clock);
-    let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / math::float_scaling();
+    // Pool may be in either direction (Base/Quote) relative to intent (Sell/Buy)
+    // is_base_to_quote tells us: true = selling Base (normal), false = selling Quote (reversed)
+    let pool_mid_price = pool.mid_price(clock);
+    let scaling = math::float_scaling();
+    let mid_price = if (is_base_to_quote) {
+        pool_mid_price
+    } else {
+        // If selling quote, flip the price: scaling^2 / pool_price
+        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
+        assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
+        (flipped_u128 as u64)
+    };
+    let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / (scaling as u128);
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
 
@@ -373,17 +388,19 @@ public fun process_intent<SellCoin, BuyCoin>(
 /// * `intent`: &mut Intent.
 /// * `fill_amount`: SellCoin units to fill this round.
 /// * `payout`: Solver's payout of BuyCoin for this partial fill.
-/// * `pool`: DeepBook pool for reference price floor.
+/// * `pool`: DeepBook pool (Base, Quote order — may be reversed relative to intent).
+/// * `is_base_to_quote`: true if pool's base matches SellCoin direction.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 ///
 /// Returns: `Coin<SellCoin>` — partial sell coin released from the intent for solver.
-public fun process_intent_partial<SellCoin, BuyCoin>(
+public fun process_intent_partial<SellCoin, BuyCoin, Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: &mut Intent<SellCoin, BuyCoin>,
     fill_amount: u64,
     payout: Coin<BuyCoin>,
-    pool: &DeepbookPool<SellCoin, BuyCoin>,
+    pool: &DeepbookPool<Base, Quote>,
+    is_base_to_quote: bool,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SellCoin> {
@@ -398,8 +415,18 @@ public fun process_intent_partial<SellCoin, BuyCoin>(
     );
 
     // 2. Calculate price floor via DeepBook mid_price
-    let mid_price = pool.mid_price(clock);
-    let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / math::float_scaling();
+    // Pool may be in either direction (Base/Quote) relative to intent (Sell/Buy)
+    let pool_mid_price = pool.mid_price(clock);
+    let scaling = math::float_scaling();
+    let mid_price = if (is_base_to_quote) {
+        pool_mid_price
+    } else {
+        // If selling quote, flip the price: scaling^2 / pool_price
+        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
+        assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
+        (flipped_u128 as u64)
+    };
+    let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / (scaling as u128);
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
 
