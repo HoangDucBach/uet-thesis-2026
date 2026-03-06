@@ -13,10 +13,9 @@
  *   CoW pair (intentA: BASE→QUOTE, intentB: QUOTE→BASE):
  *     flashLoanQuoteAsset(payoutToA) → [quoteLoan, floanA]
  *     flashLoanBaseAsset(payoutToB)  → [baseLoan,  floanB]
- *     (buyCoinA, sellCoinA, ownerA) = process_intent<BASE,QUOTE>(ticket, intentA, quoteLoan, ...)
- *     (buyCoinB, sellCoinB, ownerB) = process_intent<QUOTE,BASE>(ticket, intentB, baseLoan,  ...)
- *     transferObjects([buyCoinA], ownerA)                // deliver QUOTE to ownerA
- *     transferObjects([buyCoinB], ownerB)                // deliver BASE  to ownerB
+ *     sellCoinA = process_intent<BASE,QUOTE>(ticket, intentA, quoteLoan, ...)
+ *     sellCoinB = process_intent<QUOTE,BASE>(ticket, intentB, baseLoan,  ...)
+ *       └─ contract transfers payout directly to each owner (trustless delivery)
  *     splitCoins(sellCoinB, [payoutToA]) → [repayA, surplusB]  // B sold QUOTE → repay floanA
  *     splitCoins(sellCoinA, [payoutToB]) → [repayB, surplusA]  // A sold BASE  → repay floanB
  *     returnFlashLoanQuoteAsset(repayA, floanA)
@@ -25,8 +24,8 @@
  *
  *   AMM route (intent: BASE→QUOTE via swap):
  *     flashLoanQuoteAsset(estimatedOut) → [quoteLoan, floan]   // borrow payout
- *     (buyCoin, sellCoin, owner) = process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...)
- *     transferObjects([buyCoin], owner)                         // deliver QUOTE to user
+ *     sellCoin = process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...)
+ *       └─ contract transfers payout directly to owner (trustless delivery)
  *     swapExactBaseForQuote(sellCoin) → [baseRemainder, quoteBack, deep]
  *     splitCoins(quoteBack, [estimatedOut]) → [repay, surplus]
  *     returnFlashLoanQuoteAsset(repay, floan)                   // repay exactly
@@ -48,17 +47,12 @@ import {
   WAL_METADATA,
   DBTC_METADATA,
 } from "../shared/constants/coins.ts";
-import {
-  DeepBookClient,
-  testnetPools,
-  mainnetPools,
-} from "@mysten/deepbook-v3";
-import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
+import { deepbook, mainnetPools, testnetPools } from "@mysten/deepbook-v3";
+import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   Transaction,
-  Inputs,
   SerialTransactionExecutor,
 } from "@mysten/sui/transactions";
 
@@ -218,7 +212,7 @@ class PriceOracle {
     }
   >();
 
-  constructor(private readonly dbClient: DeepBookClient) {
+  constructor(private readonly deepbookClient: any) {
     // Register trading pairs using centralized token metadata
     this.register(
       SUI_METADATA.type,
@@ -299,10 +293,18 @@ class PriceOracle {
     const cached = this.priceCache.get(poolKey);
     if (cached && Date.now() - cached.ts < this.TTL_MS) return cached.price;
 
-    const price = await this.dbClient.midPrice(poolKey);
-    const scaled = BigInt(Math.round(price * Number(CONFIG.FLOAT_SCALING)));
-    this.priceCache.set(poolKey, { price: scaled, ts: Date.now() });
-    return scaled;
+    try {
+      const price = await this.deepbookClient.deepbook.midPrice(poolKey);
+      const scaled = BigInt(Math.round(price * Number(CONFIG.FLOAT_SCALING)));
+      this.priceCache.set(poolKey, { price: scaled, ts: Date.now() });
+      return scaled;
+    } catch (err) {
+      console.error(`[getMidPrice] Error fetching price for ${poolKey}:`, err);
+      // Return cached price or fallback
+      const cached = this.priceCache.get(poolKey);
+      if (cached) return cached.price;
+      throw err;
+    }
   }
 
   async estimateAmmOut(intent: IntentInfo): Promise<bigint> {
@@ -318,8 +320,7 @@ class PriceOracle {
 // ─── Solver A ─────────────────────────────────────────────────────────────────
 
 class SolverA {
-  private readonly suiClient: SuiJsonRpcClient;
-  private readonly dbClient: DeepBookClient;
+  private readonly suiClient;
   private readonly oracle: PriceOracle;
   private readonly keypair: Ed25519Keypair;
   readonly address: string;
@@ -338,18 +339,17 @@ class SolverA {
     this.keypair = Ed25519Keypair.fromSecretKey(secretKey);
     this.address = this.keypair.toSuiAddress();
 
-    this.suiClient = new SuiJsonRpcClient({
-      url: getJsonRpcFullnodeUrl(CONFIG.NETWORK),
-      network: CONFIG.NETWORK,
-    });
+    const GRPC_URLS = {
+      mainnet: "https://fullnode.mainnet.sui.io:443",
+      testnet: "https://fullnode.testnet.sui.io:443",
+    };
 
-    this.dbClient = new DeepBookClient({
-      address: this.address,
+    this.suiClient = new SuiGrpcClient({
       network: CONFIG.NETWORK,
-      client: this.suiClient,
-    });
+      baseUrl: GRPC_URLS[CONFIG.NETWORK],
+    }).$extend(deepbook({ address: this.address }));
 
-    this.oracle = new PriceOracle(this.dbClient);
+    this.oracle = new PriceOracle(this.suiClient);
     this.executor = new SerialTransactionExecutor({
       client: this.suiClient,
       signer: this.keypair,
@@ -416,9 +416,8 @@ class SolverA {
       return;
     }
 
-    // Mark all batch intents; resolve shared object refs in parallel
+    // Mark all batch intents
     data.intent_ids.forEach((id) => this.intentPool.markInBatch(id, batchId));
-    await this.resolveSharedRefs(data.intent_ids);
 
     const solution = await this.buildSolution({
       batchId,
@@ -707,39 +706,30 @@ class SolverA {
   private async executeSettlement(solution: BatchSolution): Promise<void> {
     const tx = new Transaction();
 
-    // Deduplicate tx.object() refs — each unique objectId must appear only ONCE
-    // as an input in the PTB.  Calling tx.object(sameId) twice creates duplicate
-    // inputs which Sui rejects as "mutable object appears more than once".
-    const objRefs = new Map<string, ReturnType<typeof tx.object>>();
-    const getRef = (id: string) => {
-      if (!objRefs.has(id)) objRefs.set(id, tx.object(id));
-      return objRefs.get(id)!;
-    };
-
     // 1. open_settlement(state, clock) → ticket
     const openResult = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::open_settlement`,
-      arguments: [getRef(solution.auctionStateId), tx.object.clock()],
+      arguments: [tx.object(solution.auctionStateId), tx.object.clock()],
     });
     const ticket = openResult[0]!;
 
     // 2. Process CoW pairs
     for (const pair of solution.cowPairs) {
-      await this.addCowPairCalls(tx, ticket, pair, getRef);
+      await this.addCowPairCalls(tx, ticket, pair);
     }
 
     // 3. Process AMM routes
     for (const route of solution.ammRoutes) {
-      await this.addAmmRouteCalls(tx, ticket, route, getRef);
+      await this.addAmmRouteCalls(tx, ticket, route);
     }
 
     // 4. close_settlement(state, ticket, config)
     tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::close_settlement`,
       arguments: [
-        getRef(solution.auctionStateId),
+        tx.object(solution.auctionStateId),
         ticket,
-        getRef(CONFIG.GLOBAL_CONFIG_ID),
+        tx.object(CONFIG.GLOBAL_CONFIG_ID),
       ],
     });
 
@@ -778,30 +768,24 @@ class SolverA {
    *
    * The two intents are inverse directions on the same pool, so each solver's
    * loan is repaid by the counterpart's sell coin — zero inventory required.
-   *
-   *   floanA borrows BuyCoin for intentA  ← repaid by intentB's sellCoin
-   *   floanB borrows BuyCoin for intentB  ← repaid by intentA's sellCoin
-   *
-   * IMPORTANT: Both intents resolve to the same DeepBook pool.  getRef() ensures
-   * the pool object appears only once in the PTB inputs.
+   * process_intent returns only Coin<SellCoin>; payout is delivered to the
+   * intent owner directly by the contract.
    */
   private async addCowPairCalls(
     tx: Transaction,
     ticket: ReturnType<Transaction["moveCall"]>[number],
     pair: CowPair,
-    pool_ref: ReturnType<typeof tx.object>,
   ): Promise<void> {
     const { intentA, intentB } = pair;
-    if (!intentA.sharedRef || !intentB.sharedRef) {
-      console.warn(`[SolverA] Skipping CoW pair — missing sharedRef`);
-      return;
-    }
 
     const pool = this.oracle.resolvePool(intentA.sellType, intentA.buyType);
     if (!pool) {
       console.warn(`[SolverA] Skipping CoW pair — pool not found`);
       return;
     }
+
+    console.debug(`[CoW] intentA: sell=${short(intentA.sellType)}, buy=${short(intentA.buyType)}`);
+    console.debug(`[CoW] resolved pool.poolKey=${pool.poolKey}, isBaseToQuote=${pool.isBaseToQuote}, baseDecimals=${pool.baseDecimals}, quoteDecimals=${pool.quoteDecimals}`);
 
     const poolId = this.resolveDeepBookPoolId(pool.poolKey);
     const { poolKey, isBaseToQuote, baseDecimals, quoteDecimals } = pool;
@@ -819,116 +803,125 @@ class SolverA {
     // 1. Flashloan BuyCoin for each intent
     const [loanCoinA, floanA] = isBaseToQuote
       ? tx.add(
-          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutToADecimals),
+          this.suiClient.deepbook.flashLoans.borrowQuoteAsset(
+            poolKey,
+            payoutToADecimals,
+          ),
         )
       : tx.add(
-          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutToADecimals),
+          this.suiClient.deepbook.flashLoans.borrowBaseAsset(
+            poolKey,
+            payoutToADecimals,
+          ),
         );
+    console.debug(`[CoW] loanCoinA: ${loanCoinA ? 'OK' : 'UNDEFINED'}, floanA: ${floanA ? 'OK' : 'UNDEFINED'}`);
 
     const [loanCoinB, floanB] = isBaseToQuote
       ? tx.add(
-          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutToBDecimals),
+          this.suiClient.deepbook.flashLoans.borrowBaseAsset(
+            poolKey,
+            payoutToBDecimals,
+          ),
         )
       : tx.add(
-          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutToBDecimals),
+          this.suiClient.deepbook.flashLoans.borrowQuoteAsset(
+            poolKey,
+            payoutToBDecimals,
+          ),
         );
+    console.debug(`[CoW] loanCoinB: ${loanCoinB ? 'OK' : 'UNDEFINED'}, floanB: ${floanB ? 'OK' : 'UNDEFINED'}`);
 
-    // 2. process_intent<SellA, BuyA> → (buyCoinA, sellCoinA, ownerA)
-    const [buyCoinA, sellCoinA, ownerA] = tx.moveCall({
+    // 2. process_intent<SellA, BuyA> → sellCoinA (payout transferred to ownerA by contract)
+    const [sellCoinA] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intentA.sellType, intentA.buyType],
       arguments: [
         ticket,
-        tx.object(
-          Inputs.SharedObjectRef({
-            objectId: intentA.sharedRef.objectId,
-            initialSharedVersion: intentA.sharedRef.initialSharedVersion,
-            mutable: true,
-          }),
-        ),
+        tx.object(intentA.intentId), // SDK auto-resolves shared object version
         loanCoinA!,
-        pool_ref,
+        tx.object(poolId),
         tx.object.clock(),
       ],
     });
+    console.debug(`[CoW] sellCoinA: ${sellCoinA ? 'OK' : 'UNDEFINED'}`);
 
-    // 3. process_intent<SellB, BuyB> → (buyCoinB, sellCoinB, ownerB)
-    const [buyCoinB, sellCoinB, ownerB] = tx.moveCall({
+    // 3. process_intent<SellB, BuyB> → sellCoinB (payout transferred to ownerB by contract)
+    const [sellCoinB] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intentB.sellType, intentB.buyType],
       arguments: [
         ticket,
-        tx.object(
-          Inputs.SharedObjectRef({
-            objectId: intentB.sharedRef.objectId,
-            initialSharedVersion: intentB.sharedRef.initialSharedVersion,
-            mutable: true,
-          }),
-        ),
+        tx.object(intentB.intentId), // SDK auto-resolves shared object version
         loanCoinB!,
-        pool_ref,
+        tx.object(poolId),
         tx.object.clock(),
       ],
     });
+    console.debug(`[CoW] sellCoinB: ${sellCoinB ? 'OK' : 'UNDEFINED'}`);
 
-    // 4. Forward payouts to intent owners
-    tx.transferObjects([buyCoinA!], ownerA!);
-    tx.transferObjects([buyCoinB!], ownerB!);
-
-    // 5. Cross-repay flashloans using counterpart sell coins
-    //    sellCoinB (intentB's sell = intentA's buy type) repays floanA
-    //    sellCoinA (intentA's sell = intentB's buy type) repays floanB
-    const [repayA, surplusFromB] = tx.splitCoins(sellCoinB!, [
+    // 4. Cross-repay flashloans using counterpart sell coins
+    //    splitCoins returns only the split amount; remainder stays in original coin
+    //    sellCoinB after split = surplus from B (to transfer back)
+    //    sellCoinA after split = surplus from A (to transfer back)
+    const [repayA] = tx.splitCoins(sellCoinB!, [
       tx.pure.u64(pair.payoutToA),
     ]);
-    const [repayB, surplusFromA] = tx.splitCoins(sellCoinA!, [
+    console.debug(`[CoW] repayA: ${repayA ? 'OK' : 'UNDEFINED'}, sellCoinB(surplus): ${sellCoinB ? 'OK' : 'UNDEFINED'}`);
+    const [repayB] = tx.splitCoins(sellCoinA!, [
       tx.pure.u64(pair.payoutToB),
     ]);
+    console.debug(`[CoW] repayB: ${repayB ? 'OK' : 'UNDEFINED'}, sellCoinA(surplus): ${sellCoinA ? 'OK' : 'UNDEFINED'}`);
 
     if (isBaseToQuote) {
       // floanA = QUOTE → repay with QUOTE (sellCoinB is intentB's sell = QUOTE)
       const loanRemainA = tx.add(
-        this.dbClient.flashLoans.returnQuoteAsset(
+        this.suiClient.deepbook.flashLoans.returnQuoteAsset(
           poolKey,
           payoutToADecimals,
           repayA!,
           floanA!,
         ),
       );
+      console.debug(`[CoW] loanRemainA: ${loanRemainA ? 'OK' : 'UNDEFINED'}`);
       // floanB = BASE  → repay with BASE  (sellCoinA is intentA's sell = BASE)
       const loanRemainB = tx.add(
-        this.dbClient.flashLoans.returnBaseAsset(
+        this.suiClient.deepbook.flashLoans.returnBaseAsset(
           poolKey,
           payoutToBDecimals,
           repayB!,
           floanB!,
         ),
       );
+      console.debug(`[CoW] loanRemainB: ${loanRemainB ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[CoW] Transfer: sellCoinA=${sellCoinA ? 'OK' : 'UNDEFINED'}, sellCoinB=${sellCoinB ? 'OK' : 'UNDEFINED'}, loanRemainA=${loanRemainA ? 'OK' : 'UNDEFINED'}, loanRemainB=${loanRemainB ? 'OK' : 'UNDEFINED'}`);
       tx.transferObjects(
-        [surplusFromA!, surplusFromB!, loanRemainA, loanRemainB],
+        [sellCoinA!, sellCoinB!, loanRemainA, loanRemainB],
         this.address,
       );
     } else {
       // floanA = BASE  → repay with BASE  (sellCoinB is intentB's sell = BASE)
       const loanRemainA = tx.add(
-        this.dbClient.flashLoans.returnBaseAsset(
+        this.suiClient.deepbook.flashLoans.returnBaseAsset(
           poolKey,
           payoutToADecimals,
           repayA!,
           floanA!,
         ),
       );
+      console.debug(`[CoW] loanRemainA: ${loanRemainA ? 'OK' : 'UNDEFINED'}`);
       // floanB = QUOTE → repay with QUOTE (sellCoinA is intentA's sell = QUOTE)
       const loanRemainB = tx.add(
-        this.dbClient.flashLoans.returnQuoteAsset(
+        this.suiClient.deepbook.flashLoans.returnQuoteAsset(
           poolKey,
           payoutToBDecimals,
           repayB!,
           floanB!,
         ),
       );
+      console.debug(`[CoW] loanRemainB: ${loanRemainB ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[CoW] Transfer: sellCoinA=${sellCoinA ? 'OK' : 'UNDEFINED'}, sellCoinB=${sellCoinB ? 'OK' : 'UNDEFINED'}, loanRemainA=${loanRemainA ? 'OK' : 'UNDEFINED'}, loanRemainB=${loanRemainB ? 'OK' : 'UNDEFINED'}`);
       tx.transferObjects(
-        [surplusFromA!, surplusFromB!, loanRemainA, loanRemainB],
+        [sellCoinA!, sellCoinB!, loanRemainA, loanRemainB],
         this.address,
       );
     }
@@ -939,28 +932,23 @@ class SolverA {
    *
    * Flow (BASE→QUOTE example):
    *   1. flashLoanQuoteAsset(estimatedOut) → [quoteLoan, floan]
-   *   2. process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...) → (buyCoin, sellCoin, owner)
-   *   3. transferObjects([buyCoin], owner)           — deliver QUOTE to user
-   *   4. swapExactBaseForQuote(sellCoin) → [baseRemainder, quoteBack, deep]
-   *   5. splitCoins(quoteBack, [estimatedOut]) → [repay, surplus]
-   *   6. returnFlashLoanQuoteAsset(repay, floan)     — repay exactly what was borrowed
-   *   7. transferObjects([surplus, baseRemainder, deep], solver)
+   *   2. process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...) → sellCoin
+   *      └─ contract transfers payout directly to intent owner
+   *   3. swapExactBaseForQuote(sellCoin) → [baseRemainder, quoteBack, deep]
+   *   4. splitCoins(quoteBack, [estimatedOut]) → [repay, surplus]
+   *   5. returnFlashLoanQuoteAsset(repay, floan)     — repay exactly what was borrowed
+   *   6. transferObjects([surplus, baseRemainder, deep], solver)
    */
   private async addAmmRouteCalls(
     tx: Transaction,
     ticket: ReturnType<Transaction["moveCall"]>[number],
     route: AmmRoute,
-    getRef: (id: string) => ReturnType<typeof tx.object>,
   ): Promise<void> {
     const { intent, poolKey, isBaseToQuote } = route;
-    if (!intent.sharedRef) {
-      console.warn(
-        `[SolverA] Skipping AMM route — missing sharedRef for ${short(intent.intentId)}`,
-      );
-      return;
-    }
 
+    console.debug(`[AMM] intent: sell=${short(intent.sellType)}, buy=${short(intent.buyType)}`);
     const pool = this.oracle.resolvePool(intent.sellType, intent.buyType)!;
+    console.debug(`[AMM] resolved pool.poolKey=${pool.poolKey}, isBaseToQuote=${pool.isBaseToQuote}, baseDecimals=${pool.baseDecimals}, quoteDecimals=${pool.quoteDecimals}`);
     const poolId = this.resolveDeepBookPoolId(poolKey);
 
     const payoutRaw = route.estimatedOut; // amount borrowed (and paid to user)
@@ -974,41 +962,37 @@ class SolverA {
     // 1. Flashloan BuyCoin to fund user payout
     const [loanCoin, floan] = isBaseToQuote
       ? tx.add(
-          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutDecimals),
+          this.suiClient.deepbook.flashLoans.borrowQuoteAsset(
+            poolKey,
+            payoutDecimals,
+          ),
         )
       : tx.add(
-          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutDecimals),
+          this.suiClient.deepbook.flashLoans.borrowBaseAsset(
+            poolKey,
+            payoutDecimals,
+          ),
         );
 
-    // 2. process_intent → (buyCoin, sellCoin, owner)
-    //    buyCoin  = the loaned coin (forwarded to user)
-    //    sellCoin = intent's locked sell balance (used to repay the loan)
-    const [buyCoin, sellCoin, owner] = tx.moveCall({
+    // 2. process_intent → sellCoin (contract transfers payout directly to intent owner)
+    const [sellCoin] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intent.sellType, intent.buyType],
       arguments: [
         ticket,
-        tx.object(
-          Inputs.SharedObjectRef({
-            objectId: intent.sharedRef.objectId,
-            initialSharedVersion: intent.sharedRef.initialSharedVersion,
-            mutable: true,
-          }),
-        ),
+        tx.object(intent.intentId), // SDK auto-resolves shared object version
         loanCoin!,
-        getRef(poolId),
+        tx.object(poolId),
         tx.object.clock(),
       ],
     });
+    console.debug(`[AMM] sellCoin: ${sellCoin ? 'OK' : 'UNDEFINED'}, loanCoin: ${loanCoin ? 'OK' : 'UNDEFINED'}, floan: ${floan ? 'OK' : 'UNDEFINED'}`);
 
-    // 3. Deliver payout to intent owner
-    tx.transferObjects([buyCoin!], owner!);
-
-    // 4. Swap sell coin back for buy-coin type to repay the flashloan
+    // 3. Swap sell coin back for buy-coin type to repay the flashloan
     if (isBaseToQuote) {
       // intent sold BASE → swap BASE→QUOTE, repay QUOTE loan
       const [baseRemainder, quoteBack, deepFee] = tx.add(
-        this.dbClient.deepBook.swapExactBaseForQuote({
+        this.suiClient.deepbook.deepBook.swapExactBaseForQuote({
           poolKey,
           amount: sellDecimals,
           deepAmount: 0,
@@ -1016,17 +1000,20 @@ class SolverA {
           baseCoin: sellCoin!,
         }),
       );
+      console.debug(`[AMM] baseRemainder: ${baseRemainder ? 'OK' : 'UNDEFINED'}, quoteBack: ${quoteBack ? 'OK' : 'UNDEFINED'}, deepFee: ${deepFee ? 'OK' : 'UNDEFINED'}`);
       const [repay, surplus] = tx.splitCoins(quoteBack!, [
         tx.pure.u64(payoutRaw),
       ]);
+      console.debug(`[AMM] repay: ${repay ? 'OK' : 'UNDEFINED'}, surplus: ${surplus ? 'OK' : 'UNDEFINED'}`);
       const loanRemain = tx.add(
-        this.dbClient.flashLoans.returnQuoteAsset(
+        this.suiClient.deepbook.flashLoans.returnQuoteAsset(
           poolKey,
           payoutDecimals,
           repay!,
           floan!,
         ),
       );
+      console.debug(`[AMM] loanRemain: ${loanRemain ? 'OK' : 'UNDEFINED'}, Transfer: surplus=${surplus ? 'OK' : 'UNDEFINED'}, baseRemainder=${baseRemainder ? 'OK' : 'UNDEFINED'}, deepFee=${deepFee ? 'OK' : 'UNDEFINED'}, loanRemain=${loanRemain ? 'OK' : 'UNDEFINED'}`);
       tx.transferObjects(
         [surplus!, baseRemainder!, deepFee!, loanRemain],
         this.address,
@@ -1034,7 +1021,7 @@ class SolverA {
     } else {
       // intent sold QUOTE → swap QUOTE→BASE, repay BASE loan
       const [baseBack, quoteRemainder, deepFee] = tx.add(
-        this.dbClient.deepBook.swapExactQuoteForBase({
+        this.suiClient.deepbook.deepBook.swapExactQuoteForBase({
           poolKey,
           amount: sellDecimals,
           deepAmount: 0,
@@ -1042,17 +1029,20 @@ class SolverA {
           quoteCoin: sellCoin as any,
         }),
       );
+      console.debug(`[AMM] baseBack: ${baseBack ? 'OK' : 'UNDEFINED'}, quoteRemainder: ${quoteRemainder ? 'OK' : 'UNDEFINED'}, deepFee: ${deepFee ? 'OK' : 'UNDEFINED'}`);
       const [repay, surplus] = tx.splitCoins(baseBack!, [
         tx.pure.u64(payoutRaw),
       ]);
+      console.debug(`[AMM] repay: ${repay ? 'OK' : 'UNDEFINED'}, surplus: ${surplus ? 'OK' : 'UNDEFINED'}`);
       const loanRemain = tx.add(
-        this.dbClient.flashLoans.returnBaseAsset(
+        this.suiClient.deepbook.flashLoans.returnBaseAsset(
           poolKey,
           payoutDecimals,
           repay!,
           floan!,
         ),
       );
+      console.debug(`[AMM] loanRemain: ${loanRemain ? 'OK' : 'UNDEFINED'}, Transfer: surplus=${surplus ? 'OK' : 'UNDEFINED'}, quoteRemainder=${quoteRemainder ? 'OK' : 'UNDEFINED'}, deepFee=${deepFee ? 'OK' : 'UNDEFINED'}, loanRemain=${loanRemain ? 'OK' : 'UNDEFINED'}`);
       tx.transferObjects(
         [surplus!, quoteRemainder!, deepFee!, loanRemain],
         this.address,
@@ -1131,37 +1121,6 @@ class SolverA {
    * Fetch shared object metadata (initialSharedVersion) for intent IDs in parallel.
    * Required to construct SharedObjectRef for PTB arguments.
    */
-  private async resolveSharedRefs(ids: string[]): Promise<void> {
-    await Promise.all(
-      ids.map(async (id) => {
-        if (this.intentPool.get(id)?.sharedRef) return;
-        try {
-          const resp = await this.suiClient.getObject({
-            id,
-            options: { showOwner: true },
-          });
-          const obj = resp.data;
-          if (!obj) return;
-
-          // initialSharedVersion comes from owner.Shared.initial_shared_version
-          let initialSharedVersion = 0;
-          const owner = obj.owner as any;
-          if (owner && typeof owner === "object" && "Shared" in owner) {
-            initialSharedVersion = Number(owner.Shared.initial_shared_version);
-          }
-
-          this.intentPool.setSharedRef(id, {
-            objectId: id,
-            initialSharedVersion,
-            digest: obj.digest,
-          });
-        } catch (err) {
-          console.error(`[SolverA] resolveSharedRef ${short(id)}:`, err);
-        }
-      }),
-    );
-  }
-
   private cleanupBatch(solution: BatchSolution): void {
     for (const p of solution.cowPairs) {
       this.intentPool.remove(p.intentA.intentId);

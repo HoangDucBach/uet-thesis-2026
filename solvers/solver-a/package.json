@@ -10,8 +10,8 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.12.0",
     "@grpc/proto-loader": "^0.7.15",
-    "@mysten/bcs": "^1.2.1",
-    "@mysten/deepbook-v3": "^1.1.0",
+    "@mysten/bcs": "^2.0.2",
+    "@mysten/deepbook-v3": "^1.1.5",
     "@mysten/sui": "^2.5.1"
   },
   "devDependencies": {

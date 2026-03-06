@@ -8,9 +8,9 @@ set -e
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-PACKAGE_ID="0x778fe3b8cfc207d1da1b217b4e6b197cafdd5fc8f29ee2dee95128074ec53201"
+PACKAGE_ID="0xa6258e6781770252b347735289a093b39c7a6c762a8820008d892340797d445a"
 CLOCK="0x6"
-GAS_BUDGET="10000000"
+GAS_BUDGET="20000000"
 
 DEEP_TYPE="0x36dbef866a1d62bf7328989a10fb2f07d769f4ee587c0de4a0a256e57e0a58a8::deep::DEEP"
 SUI_TYPE="0x2::sui::SUI"
@@ -35,7 +35,7 @@ echo ""
 echo ">>> DEEP coins owned:"
 DEEP_COIN=$(sui client objects --json 2>/dev/null \
   | jq -r --arg t "0x2::coin::Coin<$DEEP_TYPE>" \
-    '.[] | select(.data.type == $t) | .data.objectId' \
+    '.[] | select(.data.type == $t and .data.content.fields.balance != "0") | .data.objectId' \
   | head -1)
 
 if [ -z "$DEEP_COIN" ] || [ "$DEEP_COIN" = "null" ]; then
@@ -72,6 +72,14 @@ echo "Intent A submitted OK"
 # 0.2 DEEP = 200_000 units (decimals=6)
 # expected SUI = 200_000 * 29_460_000 * 1000 / 1e9 = 5_892_000 MIST
 # min SUI (10% buffer) = 5_300_000 MIST
+
+echo ""
+echo ">>> Refreshing DEEP coin lookup..."
+DEEP_COIN=$(sui client objects --json 2>/dev/null \
+  | jq -r --arg t "0x2::coin::Coin<$DEEP_TYPE>" \
+    '.[] | select(.data.type == $t and .data.content.fields.balance != "0") | .data.objectId' \
+  | head -1)
+echo "DEEP coin object: $DEEP_COIN"
 
 echo ""
 echo ">>> Submitting Intent B: sell 0.2 DEEP → want ≥5_300_000 MIST (0.0053 SUI)"
