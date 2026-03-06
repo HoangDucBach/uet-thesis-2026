@@ -6,7 +6,31 @@
  *   - CoW matching: greedy pair matching, maximize surplus
  *   - AMM fallback: unmatched intents routed via DeepBook v3 swap output chaining
  *   - Score = total surplus across entire batch
- *   - Capital: zero-inventory via DeepBook PTB result chaining for AMM routes
+ *   - Capital: ZERO INVENTORY — all settlement funded via DeepBook flashloans
+ *
+ * Flashloan settlement flow:
+ *
+ *   CoW pair (intentA: BASE→QUOTE, intentB: QUOTE→BASE):
+ *     flashLoanQuoteAsset(payoutToA) → [quoteLoan, floanA]
+ *     flashLoanBaseAsset(payoutToB)  → [baseLoan,  floanB]
+ *     (buyCoinA, sellCoinA, ownerA) = process_intent<BASE,QUOTE>(ticket, intentA, quoteLoan, ...)
+ *     (buyCoinB, sellCoinB, ownerB) = process_intent<QUOTE,BASE>(ticket, intentB, baseLoan,  ...)
+ *     transferObjects([buyCoinA], ownerA)                // deliver QUOTE to ownerA
+ *     transferObjects([buyCoinB], ownerB)                // deliver BASE  to ownerB
+ *     splitCoins(sellCoinB, [payoutToA]) → [repayA, surplusB]  // B sold QUOTE → repay floanA
+ *     splitCoins(sellCoinA, [payoutToB]) → [repayB, surplusA]  // A sold BASE  → repay floanB
+ *     returnFlashLoanQuoteAsset(repayA, floanA)
+ *     returnFlashLoanBaseAsset (repayB, floanB)
+ *     transferObjects([surplusA, surplusB], solver)      // keep CoW surplus
+ *
+ *   AMM route (intent: BASE→QUOTE via swap):
+ *     flashLoanQuoteAsset(estimatedOut) → [quoteLoan, floan]   // borrow payout
+ *     (buyCoin, sellCoin, owner) = process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...)
+ *     transferObjects([buyCoin], owner)                         // deliver QUOTE to user
+ *     swapExactBaseForQuote(sellCoin) → [baseRemainder, quoteBack, deep]
+ *     splitCoins(quoteBack, [estimatedOut]) → [repay, surplus]
+ *     returnFlashLoanQuoteAsset(repay, floan)                   // repay exactly
+ *     transferObjects([surplus, baseRemainder, deep], solver)   // keep profit
  */
 
 import {
@@ -16,6 +40,14 @@ import {
   type BatchOpenedPayload,
   type WinnerSelectedPayload,
 } from "../shared/index.ts";
+import {
+  DEEP_METADATA,
+  SUI_METADATA,
+  DBUSDC_METADATA,
+  DBUSDT_METADATA,
+  WAL_METADATA,
+  DBTC_METADATA,
+} from "../shared/constants/coins.ts";
 import {
   DeepBookClient,
   testnetPools,
@@ -178,14 +210,44 @@ class PriceOracle {
   private readonly TTL_MS = 2_000;
   private poolRegistry = new Map<
     string,
-    { poolKey: string; isBaseToQuote: boolean; baseDecimals: number; quoteDecimals: number }
+    {
+      poolKey: string;
+      isBaseToQuote: boolean;
+      baseDecimals: number;
+      quoteDecimals: number;
+    }
   >();
 
   constructor(private readonly dbClient: DeepBookClient) {
-    this.register("0x2::sui::SUI", "DBUSDC", "SUI_DBUSDC", 9, 6);
-    this.register("0x2::sui::SUI", "DBUSDT", "SUI_DBUSDT", 9, 6);
-    this.register("DEEP", "0x2::sui::SUI", "DEEP_SUI", 6, 9);
-    this.register("DEEP", "DBUSDC", "DEEP_DBUSDC", 6, 6);
+    // Register trading pairs using centralized token metadata
+    this.register(
+      SUI_METADATA.type,
+      DBUSDC_METADATA.type,
+      "SUI_DBUSDC",
+      SUI_METADATA.decimals,
+      DBUSDC_METADATA.decimals,
+    );
+    this.register(
+      SUI_METADATA.type,
+      DBUSDT_METADATA.type,
+      "SUI_DBUSDT",
+      SUI_METADATA.decimals,
+      DBUSDT_METADATA.decimals,
+    );
+    this.register(
+      DEEP_METADATA.type,
+      SUI_METADATA.type,
+      "DEEP_SUI",
+      DEEP_METADATA.decimals,
+      SUI_METADATA.decimals,
+    );
+    this.register(
+      DEEP_METADATA.type,
+      DBUSDC_METADATA.type,
+      "DEEP_DBUSDC",
+      DEEP_METADATA.decimals,
+      DBUSDC_METADATA.decimals,
+    );
   }
 
   /**
@@ -205,7 +267,12 @@ class PriceOracle {
     const bShort = shortType(baseType);
     const qShort = shortType(quoteType);
     const entry = { poolKey, isBaseToQuote: true, baseDecimals, quoteDecimals };
-    const entryInv = { poolKey, isBaseToQuote: false, baseDecimals, quoteDecimals };
+    const entryInv = {
+      poolKey,
+      isBaseToQuote: false,
+      baseDecimals,
+      quoteDecimals,
+    };
     this.poolRegistry.set(`${baseType}→${quoteType}`, entry);
     this.poolRegistry.set(`${bShort}→${qShort}`, entry);
     this.poolRegistry.set(`${quoteType}→${baseType}`, entryInv);
@@ -215,7 +282,12 @@ class PriceOracle {
   resolvePool(
     sellType: string,
     buyType: string,
-  ): { poolKey: string; isBaseToQuote: boolean; baseDecimals: number; quoteDecimals: number } | null {
+  ): {
+    poolKey: string;
+    isBaseToQuote: boolean;
+    baseDecimals: number;
+    quoteDecimals: number;
+  } | null {
     return (
       this.poolRegistry.get(`${sellType}→${buyType}`) ??
       this.poolRegistry.get(`${shortType(sellType)}→${shortType(buyType)}`) ??
@@ -256,12 +328,6 @@ class SolverA {
   private cachedPairs: CowPair[] = [];
   private activeSolution: BatchSolution | null = null;
   private executor!: SerialTransactionExecutor;
-
-  /**
-   * coinType → largest coin object ID (refreshed after each settled batch).
-   * Used for CoW pair payouts where solver needs to supply coins from inventory.
-   */
-  private coinCache = new Map<string, string>();
 
   constructor() {
     const { scheme, secretKey } = decodeSuiPrivateKey(
@@ -505,10 +571,20 @@ class SolverA {
     const FS = CONFIG.FLOAT_SCALING;
 
     // intentA sells base/quote → gets quote/base (pool direction for A)
-    const payoutToA = applyDecimalFactor(pool, pair.intentA.sellAmount, mid, FS);
+    const payoutToA = applyDecimalFactor(
+      pool,
+      pair.intentA.sellAmount,
+      mid,
+      FS,
+    );
     // intentB is inverse: if pool.isBaseToQuote, B sells quote and gets base
     const poolInv = { ...pool, isBaseToQuote: !pool.isBaseToQuote };
-    const payoutToB = applyDecimalFactor(poolInv, pair.intentB.sellAmount, mid, FS);
+    const payoutToB = applyDecimalFactor(
+      poolInv,
+      pair.intentB.sellAmount,
+      mid,
+      FS,
+    );
 
     console.log(
       `[scorePair] ${shortType(pair.intentA.sellType)}→${shortType(pair.intentA.buyType)} ` +
@@ -625,19 +701,8 @@ class SolverA {
   // ─── Execute Settlement ────────────────────────────────────────────────────
 
   /**
-   * Builds a single PTB:
-   *
-   *   open_settlement(state, clock) → ticket
-   *
-   *   [CoW pairs]
-   *     splitCoins from solver inventory → payoutCoin
-   *     process_intent<Sell,Buy>(ticket, intent, payoutCoin, pool, clock)
-   *
-   *   [AMM routes] — zero inventory via PTB result chaining:
-   *     [baseOut, quoteOut, deepOut] = swapExact*(poolKey, amount)
-   *     process_intent<Sell,Buy>(ticket, intent, quoteOut|baseOut, pool, clock)
-   *
-   *   close_settlement(state, ticket, config)
+   * Builds a single PTB (full flashloan — zero inventory).
+   * See top-of-file architecture comment for the complete flow.
    */
   private async executeSettlement(solution: BatchSolution): Promise<void> {
     const tx = new Transaction();
@@ -704,25 +769,27 @@ class SolverA {
       // block only fires for failure paths (FailedTransaction / throw).
       if (this.activeSolution?.batchId === solution.batchId) {
         this.activeSolution = null;
-        this.coinCache.clear();
       }
     }
   }
 
   /**
-   * Adds PTB calls for a CoW pair.
-   * Solver provides payout coins from its own inventory via splitCoins.
+   * Adds PTB calls for a CoW pair using paired flashloans.
    *
-   * IMPORTANT: Both intents in a DEEP/SUI CoW pair resolve to the same DeepBook
-   * pool (DEEP_SUI).  We must use getRef() so the pool appears only once as a
-   * PTB input — calling tx.object(sameId) twice causes:
-   *   "Mutable object cannot appear more than once in one transaction"
+   * The two intents are inverse directions on the same pool, so each solver's
+   * loan is repaid by the counterpart's sell coin — zero inventory required.
+   *
+   *   floanA borrows BuyCoin for intentA  ← repaid by intentB's sellCoin
+   *   floanB borrows BuyCoin for intentB  ← repaid by intentA's sellCoin
+   *
+   * IMPORTANT: Both intents resolve to the same DeepBook pool.  getRef() ensures
+   * the pool object appears only once in the PTB inputs.
    */
   private async addCowPairCalls(
     tx: Transaction,
     ticket: ReturnType<Transaction["moveCall"]>[number],
     pair: CowPair,
-    getRef: (id: string) => ReturnType<typeof tx.object>,
+    pool_ref: ReturnType<typeof tx.object>,
   ): Promise<void> {
     const { intentA, intentB } = pair;
     if (!intentA.sharedRef || !intentB.sharedRef) {
@@ -730,21 +797,44 @@ class SolverA {
       return;
     }
 
-    const poolA = this.oracle.resolvePool(intentA.sellType, intentA.buyType);
-    const poolB = this.oracle.resolvePool(intentB.sellType, intentB.buyType);
-    if (!poolA || !poolB) {
+    const pool = this.oracle.resolvePool(intentA.sellType, intentA.buyType);
+    if (!pool) {
       console.warn(`[SolverA] Skipping CoW pair — pool not found`);
       return;
     }
 
-    const poolIdForA = this.resolveDeepBookPoolId(poolA.poolKey);
-    const poolIdForB = this.resolveDeepBookPoolId(poolB.poolKey);
+    const poolId = this.resolveDeepBookPoolId(pool.poolKey);
+    const { poolKey, isBaseToQuote, baseDecimals, quoteDecimals } = pool;
 
-    // Solver coin refs — deduplicated so same coinType object isn't added twice
-    const coinARef = getRef(await this.getSolverCoin(intentA.buyType));
-    const [coinForA] = tx.splitCoins(coinARef, [tx.pure.u64(pair.payoutToA)]);
+    // Raw → decimal conversions for the DeepBook SDK
+    // intentA buys quote (if isBaseToQuote) or base (if !isBaseToQuote)
+    const payoutToADecimals = isBaseToQuote
+      ? Number(pair.payoutToA) / 10 ** quoteDecimals
+      : Number(pair.payoutToA) / 10 ** baseDecimals;
+    // intentB is inverse of intentA
+    const payoutToBDecimals = isBaseToQuote
+      ? Number(pair.payoutToB) / 10 ** baseDecimals
+      : Number(pair.payoutToB) / 10 ** quoteDecimals;
 
-    tx.moveCall({
+    // 1. Flashloan BuyCoin for each intent
+    const [loanCoinA, floanA] = isBaseToQuote
+      ? tx.add(
+          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutToADecimals),
+        )
+      : tx.add(
+          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutToADecimals),
+        );
+
+    const [loanCoinB, floanB] = isBaseToQuote
+      ? tx.add(
+          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutToBDecimals),
+        )
+      : tx.add(
+          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutToBDecimals),
+        );
+
+    // 2. process_intent<SellA, BuyA> → (buyCoinA, sellCoinA, ownerA)
+    const [buyCoinA, sellCoinA, ownerA] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intentA.sellType, intentA.buyType],
       arguments: [
@@ -756,16 +846,14 @@ class SolverA {
             mutable: true,
           }),
         ),
-        coinForA,
-        getRef(poolIdForA),  // dedup — same pool used by both intents
+        loanCoinA!,
+        pool_ref,
         tx.object.clock(),
       ],
     });
 
-    const coinBRef = getRef(await this.getSolverCoin(intentB.buyType));
-    const [coinForB] = tx.splitCoins(coinBRef, [tx.pure.u64(pair.payoutToB)]);
-
-    tx.moveCall({
+    // 3. process_intent<SellB, BuyB> → (buyCoinB, sellCoinB, ownerB)
+    const [buyCoinB, sellCoinB, ownerB] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intentB.sellType, intentB.buyType],
       arguments: [
@@ -777,22 +865,86 @@ class SolverA {
             mutable: true,
           }),
         ),
-        coinForB,
-        getRef(poolIdForB),  // dedup
+        loanCoinB!,
+        pool_ref,
         tx.object.clock(),
       ],
     });
+
+    // 4. Forward payouts to intent owners
+    tx.transferObjects([buyCoinA!], ownerA!);
+    tx.transferObjects([buyCoinB!], ownerB!);
+
+    // 5. Cross-repay flashloans using counterpart sell coins
+    //    sellCoinB (intentB's sell = intentA's buy type) repays floanA
+    //    sellCoinA (intentA's sell = intentB's buy type) repays floanB
+    const [repayA, surplusFromB] = tx.splitCoins(sellCoinB!, [
+      tx.pure.u64(pair.payoutToA),
+    ]);
+    const [repayB, surplusFromA] = tx.splitCoins(sellCoinA!, [
+      tx.pure.u64(pair.payoutToB),
+    ]);
+
+    if (isBaseToQuote) {
+      // floanA = QUOTE → repay with QUOTE (sellCoinB is intentB's sell = QUOTE)
+      const loanRemainA = tx.add(
+        this.dbClient.flashLoans.returnQuoteAsset(
+          poolKey,
+          payoutToADecimals,
+          repayA!,
+          floanA!,
+        ),
+      );
+      // floanB = BASE  → repay with BASE  (sellCoinA is intentA's sell = BASE)
+      const loanRemainB = tx.add(
+        this.dbClient.flashLoans.returnBaseAsset(
+          poolKey,
+          payoutToBDecimals,
+          repayB!,
+          floanB!,
+        ),
+      );
+      tx.transferObjects(
+        [surplusFromA!, surplusFromB!, loanRemainA, loanRemainB],
+        this.address,
+      );
+    } else {
+      // floanA = BASE  → repay with BASE  (sellCoinB is intentB's sell = BASE)
+      const loanRemainA = tx.add(
+        this.dbClient.flashLoans.returnBaseAsset(
+          poolKey,
+          payoutToADecimals,
+          repayA!,
+          floanA!,
+        ),
+      );
+      // floanB = QUOTE → repay with QUOTE (sellCoinA is intentA's sell = QUOTE)
+      const loanRemainB = tx.add(
+        this.dbClient.flashLoans.returnQuoteAsset(
+          poolKey,
+          payoutToBDecimals,
+          repayB!,
+          floanB!,
+        ),
+      );
+      tx.transferObjects(
+        [surplusFromA!, surplusFromB!, loanRemainA, loanRemainB],
+        this.address,
+      );
+    }
   }
 
   /**
-   * Adds PTB calls for an AMM route.
+   * Adds PTB calls for an AMM route using a single flashloan.
    *
-   * PTB result chaining:
-   *   const [baseOut, quoteOut, deepOut] = tx.add(dbClient.deepBook.swapExact*(...))
-   *   tx.moveCall process_intent(..., quoteOut|baseOut, ...)
-   *
-   * The swap output is a PTB object reference — it flows directly into
-   * process_intent without any intermediate transfer. Zero inventory required.
+   * Flow (BASE→QUOTE example):
+   *   1. flashLoanQuoteAsset(estimatedOut) → [quoteLoan, floan]
+   *   2. process_intent<BASE,QUOTE>(ticket, intent, quoteLoan, ...) → (buyCoin, sellCoin, owner)
+   *   3. transferObjects([buyCoin], owner)           — deliver QUOTE to user
+   *   4. swapExactBaseForQuote(sellCoin) → [baseRemainder, quoteBack, deep]
+   *   5. splitCoins(quoteBack, [estimatedOut]) → [repay, surplus]
+   *   6. returnFlashLoanQuoteAsset(repay, floan)     — repay exactly what was borrowed
+   *   7. transferObjects([surplus, baseRemainder, deep], solver)
    */
   private async addAmmRouteCalls(
     tx: Transaction,
@@ -810,46 +962,28 @@ class SolverA {
 
     const pool = this.oracle.resolvePool(intent.sellType, intent.buyType)!;
     const poolId = this.resolveDeepBookPoolId(poolKey);
-    const sellFloat = Number(intent.sellAmount) / 10 ** (isBaseToQuote ? pool.baseDecimals : pool.quoteDecimals);
-    const minOutFloat = Number(intent.minAmountOut) / 10 ** (isBaseToQuote ? pool.quoteDecimals : pool.baseDecimals);
 
-    let buyOutRef: any;
+    const payoutRaw = route.estimatedOut; // amount borrowed (and paid to user)
+    const payoutDecimals = isBaseToQuote
+      ? Number(payoutRaw) / 10 ** pool.quoteDecimals
+      : Number(payoutRaw) / 10 ** pool.baseDecimals;
+    const sellDecimals = isBaseToQuote
+      ? Number(intent.sellAmount) / 10 ** pool.baseDecimals
+      : Number(intent.sellAmount) / 10 ** pool.quoteDecimals;
 
-    if (isBaseToQuote) {
-      const [baseCoin] = tx.splitCoins(
-        getRef(await this.getSolverCoin(intent.sellType)),
-        [tx.pure.u64(intent.sellAmount)],
-      );
-      const [baseOut2, quoteOut, deepOut] = tx.add(
-        this.dbClient.deepBook.swapExactBaseForQuote({
-          poolKey,
-          amount: sellFloat,
-          deepAmount: 0,
-          minOut: minOutFloat,
-          baseCoin,
-        }),
-      );
-      tx.transferObjects([baseOut2, deepOut], this.address);
-      buyOutRef = quoteOut;
-    } else {
-      const [quoteCoin] = tx.splitCoins(
-        getRef(await this.getSolverCoin(intent.sellType)),
-        [tx.pure.u64(intent.sellAmount)],
-      );
-      const [baseOut, quoteOut2, deepOut] = tx.add(
-        this.dbClient.deepBook.swapExactQuoteForBase({
-          poolKey,
-          amount: sellFloat,
-          deepAmount: 0,
-          minOut: minOutFloat,
-          quoteCoin: quoteCoin as any,
-        }),
-      );
-      tx.transferObjects([quoteOut2, deepOut], this.address);
-      buyOutRef = baseOut;
-    }
+    // 1. Flashloan BuyCoin to fund user payout
+    const [loanCoin, floan] = isBaseToQuote
+      ? tx.add(
+          this.dbClient.flashLoans.borrowQuoteAsset(poolKey, payoutDecimals),
+        )
+      : tx.add(
+          this.dbClient.flashLoans.borrowBaseAsset(poolKey, payoutDecimals),
+        );
 
-    tx.moveCall({
+    // 2. process_intent → (buyCoin, sellCoin, owner)
+    //    buyCoin  = the loaned coin (forwarded to user)
+    //    sellCoin = intent's locked sell balance (used to repay the loan)
+    const [buyCoin, sellCoin, owner] = tx.moveCall({
       target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
       typeArguments: [intent.sellType, intent.buyType],
       arguments: [
@@ -861,11 +995,69 @@ class SolverA {
             mutable: true,
           }),
         ),
-        buyOutRef,
-        getRef(poolId),  // dedup
+        loanCoin!,
+        getRef(poolId),
         tx.object.clock(),
       ],
     });
+
+    // 3. Deliver payout to intent owner
+    tx.transferObjects([buyCoin!], owner!);
+
+    // 4. Swap sell coin back for buy-coin type to repay the flashloan
+    if (isBaseToQuote) {
+      // intent sold BASE → swap BASE→QUOTE, repay QUOTE loan
+      const [baseRemainder, quoteBack, deepFee] = tx.add(
+        this.dbClient.deepBook.swapExactBaseForQuote({
+          poolKey,
+          amount: sellDecimals,
+          deepAmount: 0,
+          minOut: payoutDecimals, // must cover the loan
+          baseCoin: sellCoin!,
+        }),
+      );
+      const [repay, surplus] = tx.splitCoins(quoteBack!, [
+        tx.pure.u64(payoutRaw),
+      ]);
+      const loanRemain = tx.add(
+        this.dbClient.flashLoans.returnQuoteAsset(
+          poolKey,
+          payoutDecimals,
+          repay!,
+          floan!,
+        ),
+      );
+      tx.transferObjects(
+        [surplus!, baseRemainder!, deepFee!, loanRemain],
+        this.address,
+      );
+    } else {
+      // intent sold QUOTE → swap QUOTE→BASE, repay BASE loan
+      const [baseBack, quoteRemainder, deepFee] = tx.add(
+        this.dbClient.deepBook.swapExactQuoteForBase({
+          poolKey,
+          amount: sellDecimals,
+          deepAmount: 0,
+          minOut: payoutDecimals, // must cover the loan
+          quoteCoin: sellCoin as any,
+        }),
+      );
+      const [repay, surplus] = tx.splitCoins(baseBack!, [
+        tx.pure.u64(payoutRaw),
+      ]);
+      const loanRemain = tx.add(
+        this.dbClient.flashLoans.returnBaseAsset(
+          poolKey,
+          payoutDecimals,
+          repay!,
+          floan!,
+        ),
+      );
+      tx.transferObjects(
+        [surplus!, quoteRemainder!, deepFee!, loanRemain],
+        this.address,
+      );
+    }
   }
 
   // ─── Claim Refund ──────────────────────────────────────────────────────────
@@ -910,7 +1102,9 @@ class SolverA {
       arguments: [tx.object(auctionStateId)],
     });
 
-    const result = await this.executor.executeTransaction(tx, { effects: true });
+    const result = await this.executor.executeTransaction(tx, {
+      effects: true,
+    });
 
     if (result.$kind === "FailedTransaction") {
       throw new Error(
@@ -931,27 +1125,6 @@ class SolverA {
     if (!pool)
       throw new Error(`No DeepBook pool config for poolKey=${poolKey}`);
     return pool.address;
-  }
-
-  /**
-   * Get solver's largest coin object ID for a coinType (cached per batch).
-   * Cache is cleared after each settled batch to pick up new coins.
-   */
-  private async getSolverCoin(coinType: string): Promise<string> {
-    if (this.coinCache.has(coinType)) return this.coinCache.get(coinType)!;
-
-    const { data } = await this.suiClient.getCoins({
-      owner: this.address,
-      coinType,
-    });
-    if (!data.length)
-      throw new Error(`Solver has no coins of type ${shortType(coinType)}`);
-
-    const largest = data.reduce((a: (typeof data)[0], b: (typeof data)[0]) =>
-      BigInt(b.balance) > BigInt(a.balance) ? b : a,
-    );
-    this.coinCache.set(coinType, largest.coinObjectId);
-    return largest.coinObjectId;
   }
 
   /**
@@ -997,7 +1170,6 @@ class SolverA {
     for (const r of solution.ammRoutes) {
       this.intentPool.remove(r.intent.intentId);
     }
-    this.coinCache.clear(); // refresh coin refs next batch
     this.activeSolution = null;
     console.log(`[SolverA] Cleaned up #${solution.batchId}`);
   }
