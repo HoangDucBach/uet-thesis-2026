@@ -10,6 +10,7 @@ use sui::coin::Coin;
 use sui::event::emit;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
+use sui::vec_set::{Self, VecSet};
 
 // === Errors ===
 
@@ -52,9 +53,9 @@ public struct BatchRegistry has key {
 /// * `processed_count`: Number of intents processed so far.
 public struct SettlementTicket {
     batch_id: u64,
+    intent_ids: VecSet<ID>,
     committed_score: u64,
     actual_surplus: u64,
-    processed_count: u64,
 }
 
 /// Commitment entry for a solver in commit phase.
@@ -80,7 +81,7 @@ public struct CommitEntry has store {
 public struct AuctionState has key {
     id: UID,
     batch_id: u64,
-    intent_ids: vector<ID>,
+    intent_ids: VecSet<ID>,
     phase: AuctionPhase,
     commit_end_ms: u64,
     execute_deadline_ms: u64,
@@ -133,6 +134,32 @@ public struct FallbackTriggeredEvent has copy, drop {
 
 // === Functions ===
 
+fun calculate_price_floor<Base, Quote>(
+    pool: &DeepbookPool<Base, Quote>,
+    is_base_to_quote: bool,
+    amount: u64,
+    user_min_out: u64,
+    clock: &Clock,
+): u64 {
+    let pool_mid_price = pool.mid_price(clock);
+    let scaling = math::float_scaling();
+    let mid_price = if (is_base_to_quote) {
+        pool_mid_price
+    } else {
+        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
+        assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
+        (flipped_u128 as u64)
+    };
+    let fair_out_u128 = (amount as u128) * (mid_price as u128) / (scaling as u128);
+    assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
+    let fair_out = (fair_out_u128 as u64);
+
+    let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
+    assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
+    let slippage_protection = (slippage_u128 as u64);
+    math::max_u64_val(user_min_out, slippage_protection)
+}
+
 /// Initialize global batch counter.
 fun init(ctx: &mut TxContext) {
     transfer::share_object(BatchRegistry {
@@ -159,7 +186,7 @@ entry fun open_batch_and_share(
     transfer::share_object(state);
 }
 
-/// Open a new batch auction with auto-generated batch ID.
+/// Open a new batch auction.
 ///
 /// * `batch_state`: Global batch counter state.
 /// * `config`: GlobalConfig for protocol parameters.
@@ -180,10 +207,12 @@ public fun open_batch(
     let commit_end_ms = current_time_ms + config.commit_duration_ms();
     let execute_deadline_ms = commit_end_ms + config.grace_period_ms();
 
+    let intent_ids_vecset = vec_set::from_keys(intent_ids);
+
     let state = AuctionState {
         id: object::new(ctx),
         batch_id,
-        intent_ids,
+        intent_ids: intent_ids_vecset,
         phase: AuctionPhase::Commit,
         commit_end_ms,
         execute_deadline_ms,
@@ -305,16 +334,16 @@ public fun open_settlement(
 
     SettlementTicket {
         batch_id: state.batch_id,
+        intent_ids: state.intent_ids,
         committed_score: state.winner_score,
         actual_surplus: 0,
-        processed_count: 0,
     }
 }
 
-/// Process a single CoW pair intent.
+/// Process a single intent.
 ///
-/// * `ticket`: SettlementTicket (mutable — increments processed_count and actual_surplus).
-/// * `intent`: Intent<SellCoin, BuyCoin> (taken by value, deleted atomically).
+/// * `ticket`: SettlementTicket.
+/// * `intent`: Intent<SellCoin, BuyCoin>.
 /// * `payout`: Solver's payout coin of type BuyCoin.
 /// * `pool`: DeepBook pool (Base, Quote order — may be reversed relative to intent).
 /// * `is_base_to_quote`: true if pool's base matches SellCoin direction.
@@ -337,40 +366,22 @@ public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SellCoin> {
-    let intent_batch_id = intent_book::batch_id(&intent);
-    assert!(intent_batch_id.is_some(), EWrongBatch);
-    assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
+    let intent_id_val = intent_book::intent_id(&intent);
+    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
 
-    // 1. Consume intent
     let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
     let sell_amount = sell_balance.value();
 
-    // 2. Calculate price floor via DeepBook mid_price
-    // Pool may be in either direction (Base/Quote) relative to intent (Sell/Buy)
-    // is_base_to_quote tells us: true = selling Base (normal), false = selling Quote (reversed)
-    let pool_mid_price = pool.mid_price(clock);
-    let scaling = math::float_scaling();
-    let mid_price = if (is_base_to_quote) {
-        pool_mid_price
-    } else {
-        // If selling quote, flip the price: scaling^2 / pool_price
-        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
-        assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
-        (flipped_u128 as u64)
-    };
-    let fair_out_u128 = (sell_amount as u128) * (mid_price as u128) / (scaling as u128);
-    assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
-    let fair_out = (fair_out_u128 as u64);
+    let price_floor = calculate_price_floor(
+        pool,
+        is_base_to_quote,
+        sell_amount,
+        min_amount_out,
+        clock,
+    );
 
-    let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
-    assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
-    let slippage_protection = (slippage_u128 as u64);
-    let price_floor = math::max_u64_val(min_amount_out, slippage_protection);
-
-    // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-    ticket.processed_count = ticket.processed_count + 1;
 
     // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
     transfer::public_transfer(payout, owner);
@@ -380,7 +391,7 @@ public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
 }
 
 /// Process a partial fill for a partial_fillable intent.
-/// Intent is mutated but NOT deleted — it stays on-chain.
+/// Intent is mutated but NOT deleted — stay on-chain.
 /// Protocol directly transfers the payout to the intent owner — solver cannot intercept.
 /// Returns only the partial sell coin for the solver to route.
 ///
@@ -404,41 +415,24 @@ public fun process_intent_partial<SellCoin, BuyCoin, Base, Quote>(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Coin<SellCoin> {
-    let intent_batch_id = intent_book::batch_id(intent);
-    assert!(intent_batch_id.is_some(), EWrongBatch);
-    assert!(*intent_batch_id.borrow() == ticket.batch_id, EWrongBatch);
+    let intent_id_val = intent_book::intent_id(intent);
+    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
 
-    // 1. Split fill_amount from intent
     let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
         fill_amount,
     );
 
-    // 2. Calculate price floor via DeepBook mid_price
-    // Pool may be in either direction (Base/Quote) relative to intent (Sell/Buy)
-    let pool_mid_price = pool.mid_price(clock);
-    let scaling = math::float_scaling();
-    let mid_price = if (is_base_to_quote) {
-        pool_mid_price
-    } else {
-        // If selling quote, flip the price: scaling^2 / pool_price
-        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
-        assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
-        (flipped_u128 as u64)
-    };
-    let fair_out_u128 = (fill_amount as u128) * (mid_price as u128) / (scaling as u128);
-    assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
-    let fair_out = (fair_out_u128 as u64);
+    let price_floor = calculate_price_floor(
+        pool,
+        is_base_to_quote,
+        fill_amount,
+        proportional_min_out,
+        clock,
+    );
 
-    let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
-    assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
-    let slippage_protection = (slippage_u128 as u64);
-    let price_floor = math::max_u64_val(proportional_min_out, slippage_protection);
-
-    // 3. Verify payout >= price floor and accumulate surplus
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-    ticket.processed_count = ticket.processed_count + 1;
 
     // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
     transfer::public_transfer(payout, owner);
@@ -463,15 +457,15 @@ public fun close_settlement(
 
     let SettlementTicket {
         batch_id,
+        intent_ids,
         committed_score,
         actual_surplus,
-        processed_count,
     } = ticket;
 
     assert!(batch_id == state.batch_id, EWrongBatch);
 
     // Enforce that every intent in the batch was processed
-    assert!(processed_count == vector::length(&state.intent_ids), EIncompleteBatch);
+    assert!(vec_set::is_empty(&intent_ids), EIncompleteBatch);
 
     // Verify actual surplus >= score_tolerance_bps% of committed score.
     let threshold =
@@ -520,6 +514,24 @@ public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut T
         winner,
         bond_slashed: slashed_amount,
     });
+}
+
+/// Unlock an intent after its batch reaches a terminal phase (Done, Failed, Aborted).
+/// Allows the intent to be cancelled or added to a new batch.
+///
+/// * `state`: AuctionState whose phase must be Done, Failed, or Aborted.
+/// * `intent`: Intent to unlock.
+public fun unlock_batch_intent<SellCoin, BuyCoin>(
+    state: &AuctionState,
+    intent: &mut Intent<SellCoin, BuyCoin>,
+) {
+    assert!(
+        state.phase == AuctionPhase::Done ||
+        state.phase == AuctionPhase::Failed ||
+        state.phase == AuctionPhase::Aborted,
+        EWrongPhase,
+    );
+    intent_book::unlock_intent(intent);
 }
 
 /// Losing solvers withdraw their bonds after batch is Done or Failed.
@@ -588,11 +600,6 @@ public fun ticket_actual_surplus(ticket: &SettlementTicket): u64 {
     ticket.actual_surplus
 }
 
-/// Get ticket's processed intent count.
-public fun ticket_processed_count(ticket: &SettlementTicket): u64 {
-    ticket.processed_count
-}
-
 public fun is_commit_phase(state: &AuctionState): bool {
     state.phase == AuctionPhase::Commit
 }
@@ -638,7 +645,7 @@ public fun destroy_batch_state_for_testing(state: BatchRegistry) {
 
 #[test_only]
 public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {
-    SettlementTicket { batch_id, committed_score, actual_surplus: 0, processed_count: 0 }
+    SettlementTicket { batch_id, intent_ids: vec_set::empty(), committed_score, actual_surplus: 0 }
 }
 
 #[test_only]

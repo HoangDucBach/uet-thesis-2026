@@ -43,7 +43,7 @@ fun test_create_intent_fields() {
         assert!(intent_book::min_amount_out(&intent) == 200);
         assert!(intent_book::deadline(&intent) == 1000);
         assert!(intent_book::owner(&intent) == user);
-        assert!(std::option::is_none(&intent_book::batch_id(&intent)));
+        assert!(!intent_book::locked(&intent));
 
         ts::return_shared(intent);
     };
@@ -159,7 +159,7 @@ fun test_consume_intent_returns_correct_fields() {
         300,
         false,
         9999,
-        42,
+        false,
         ctx,
     );
 
@@ -177,7 +177,7 @@ fun test_consume_intent_returns_correct_fields() {
 }
 
 #[test]
-fun test_set_batch_id_for_testing() {
+fun test_lock_intent_for_testing() {
     let user = @0xA;
     let mut scenario = ts::begin(user);
     let ctx = ts::ctx(&mut scenario);
@@ -187,14 +187,14 @@ fun test_set_batch_id_for_testing() {
         50,
         false,
         9999,
-        1,
+        false,
         ctx,
     );
 
-    assert!(*std::option::borrow(&intent_book::batch_id(&intent)) == 1);
+    assert!(!intent_book::locked(&intent));
 
-    intent_book::set_batch_id_for_testing(&mut intent, 99);
-    assert!(*std::option::borrow(&intent_book::batch_id(&intent)) == 99);
+    intent_book::lock_intent_for_testing(&mut intent);
+    assert!(intent_book::locked(&intent));
 
     std::unit_test::destroy(intent);
     ts::end(scenario);
