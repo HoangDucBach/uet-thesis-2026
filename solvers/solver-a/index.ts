@@ -868,14 +868,18 @@ class SolverA {
     //    splitCoins returns only the split amount; remainder stays in original coin
     //    sellCoinB after split = surplus from B (to transfer back)
     //    sellCoinA after split = surplus from A (to transfer back)
+    console.debug(`[CoW] Flashloan decimals: borrowedA=${payoutToADecimals}, borrowedB=${payoutToBDecimals}`);
+    console.debug(`[CoW] Payout raw mist: payoutToA=${pair.payoutToA}, payoutToB=${pair.payoutToB}`);
+    console.debug(`[CoW] About to split sellCoinB (borrowed ${payoutToADecimals}): taking ${pair.payoutToA} mist`);
     const [repayA] = tx.splitCoins(sellCoinB!, [
       tx.pure.u64(pair.payoutToA),
     ]);
-    console.debug(`[CoW] repayA: ${repayA ? 'OK' : 'UNDEFINED'}, sellCoinB(surplus): ${sellCoinB ? 'OK' : 'UNDEFINED'}`);
+    console.debug(`[CoW] splitCoins #1 OK: repayA=${repayA ? 'OK' : 'UNDEFINED'}, sellCoinB(surplus)=${sellCoinB ? 'OK' : 'UNDEFINED'}`);
+    console.debug(`[CoW] About to split sellCoinA (borrowed ${payoutToBDecimals}): taking ${pair.payoutToB} mist`);
     const [repayB] = tx.splitCoins(sellCoinA!, [
       tx.pure.u64(pair.payoutToB),
     ]);
-    console.debug(`[CoW] repayB: ${repayB ? 'OK' : 'UNDEFINED'}, sellCoinA(surplus): ${sellCoinA ? 'OK' : 'UNDEFINED'}`);
+    console.debug(`[CoW] splitCoins #2 OK: repayB=${repayB ? 'OK' : 'UNDEFINED'}, sellCoinA(surplus)=${sellCoinA ? 'OK' : 'UNDEFINED'}`);
 
     if (isBaseToQuote) {
       // floanA = QUOTE → repay with QUOTE (sellCoinB is intentB's sell = QUOTE)
@@ -1010,10 +1014,11 @@ class SolverA {
         }),
       );
       console.debug(`[AMM] baseRemainder: ${baseRemainder ? 'OK' : 'UNDEFINED'}, quoteBack: ${quoteBack ? 'OK' : 'UNDEFINED'}, deepFee: ${deepFee ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[AMM] Swap output should be >= ${payoutDecimals} decimals (${payoutRaw} mist); attempting to split ${payoutRaw} mist`);
       const [repay, surplus] = tx.splitCoins(quoteBack!, [
         tx.pure.u64(payoutRaw),
       ]);
-      console.debug(`[AMM] repay: ${repay ? 'OK' : 'UNDEFINED'}, surplus: ${surplus ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[AMM] splitCoins OK: repay=${repay ? 'OK' : 'UNDEFINED'}, surplus=${surplus ? 'OK' : 'UNDEFINED'}`);
       const loanRemain = tx.add(
         this.suiClient.deepbook.flashLoans.returnQuoteAsset(
           poolKey,
@@ -1039,10 +1044,11 @@ class SolverA {
         }),
       );
       console.debug(`[AMM] baseBack: ${baseBack ? 'OK' : 'UNDEFINED'}, quoteRemainder: ${quoteRemainder ? 'OK' : 'UNDEFINED'}, deepFee: ${deepFee ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[AMM] Swap output should be >= ${payoutDecimals} decimals (${payoutRaw} mist); attempting to split ${payoutRaw} mist`);
       const [repay, surplus] = tx.splitCoins(baseBack!, [
         tx.pure.u64(payoutRaw),
       ]);
-      console.debug(`[AMM] repay: ${repay ? 'OK' : 'UNDEFINED'}, surplus: ${surplus ? 'OK' : 'UNDEFINED'}`);
+      console.debug(`[AMM] splitCoins OK: repay=${repay ? 'OK' : 'UNDEFINED'}, surplus=${surplus ? 'OK' : 'UNDEFINED'}`);
       const loanRemain = tx.add(
         this.suiClient.deepbook.flashLoans.returnBaseAsset(
           poolKey,

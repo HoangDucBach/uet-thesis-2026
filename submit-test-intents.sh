@@ -8,7 +8,7 @@ set -e
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-PACKAGE_ID="0xbc53ce27e6a0745a3e5c1a454c05f1313a567c880b21d4a9fa197010235925b6"
+PACKAGE_ID="0xc194623feceeff778d13edbf8d29a0c9f1a2f3146e01d358c050170746061045"
 CLOCK="0x6"
 GAS_BUDGET="20000000"
 
