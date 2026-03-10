@@ -53,8 +53,6 @@ async fn stream_events(
     redis_client: Arc<ConnectionManager>,
     tx: mpsc::Sender<Result<CowEvent, Status>>,
 ) -> Result<()> {
-    // Start from the latest entry already in the stream so we don't replay history
-    // on every new gRPC subscription. Fall back to "0" only on an empty stream.
     let mut last_id: String = {
         let mut conn = (*redis_client).clone();
         let result: std::result::Result<Vec<(String, Vec<(String, String)>)>, redis::RedisError> =
