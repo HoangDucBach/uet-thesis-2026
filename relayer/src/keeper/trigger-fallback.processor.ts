@@ -17,7 +17,7 @@ import { BatchStateService } from './batch-state.service';
  * Runs as a worker that processes queued trigger_fallback transactions.
  */
 @Injectable()
-@Processor('lifecycleTriggerFallback')
+@Processor('lifecycleTriggerFallback', { drainDelay: 500 })
 export class TriggerFallbackProcessor
   extends WorkerHost
   implements OnModuleInit

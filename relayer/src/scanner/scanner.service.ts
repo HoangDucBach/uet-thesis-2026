@@ -94,6 +94,13 @@ export class ScannerService
   }
 
   private addToBuffer(intent: IntentCreatedEventType) {
+    if (BigInt(intent.deadline) <= BigInt(Date.now())) {
+      this.logger.warn(
+        `Skipping expired intent ${intent.intent_id} (deadline=${intent.deadline}, now=${Date.now()})`,
+      );
+      return;
+    }
+
     this.eventBuffer.push(intent);
 
     if (this.eventBuffer.length >= this.BATCH_SIZE) {
