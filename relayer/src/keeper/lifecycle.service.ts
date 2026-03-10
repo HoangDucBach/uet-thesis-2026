@@ -6,22 +6,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BatchStateService } from './batch-state.service';
 import { BatchOpenResult } from './keeper.types';
 
-/**
- * Lifecycle Management with NestJS Bull Integration:
- * - Uses @nestjs/bullmq decorators for dependency injection
- * - @Processor() handlers run via BullMQ workers
- * - Jobs persist in Redis, survive process restarts
- * - ±100ms accuracy for delayed job execution
- *
- * Job types:
- *   - lifecycle:closeCommits: executed when now >= commitEndTime
- *   - lifecycle:triggerFallback: executed when now >= executeDeadlineTime
- */
 @Injectable()
 export class LifecycleService implements OnModuleInit {
   private readonly logger = new Logger(LifecycleService.name);
-
-  private readonly scheduled = new Set<string>();
 
   constructor(
     @InjectQueue('lifecycleCloseCommits')
@@ -42,7 +29,7 @@ export class LifecycleService implements OnModuleInit {
         batch.commitEndTime &&
         batch.executeDeadlineTime
       ) {
-        this.scheduleBatch({
+        await this.scheduleBatch({
           localBatchId: batch.localBatchId,
           auctionStateId: batch.auctionStateId,
           commitEndTime: BigInt(batch.commitEndTime),
@@ -57,7 +44,7 @@ export class LifecycleService implements OnModuleInit {
     }
   }
 
-  scheduleBatch(
+  async scheduleBatch(
     result: Pick<
       BatchOpenResult,
       | 'localBatchId'
@@ -65,12 +52,9 @@ export class LifecycleService implements OnModuleInit {
       | 'commitEndTime'
       | 'executeDeadlineTime'
     >,
-  ) {
+  ): Promise<void> {
     const { auctionStateId, localBatchId, commitEndTime, executeDeadlineTime } =
       result;
-
-    if (this.scheduled.has(auctionStateId)) return;
-    this.scheduled.add(auctionStateId);
 
     const now = BigInt(Date.now());
     const commitDelay = commitEndTime > now ? Number(commitEndTime - now) : 0;
@@ -82,17 +66,32 @@ export class LifecycleService implements OnModuleInit {
         `close_commits in ${commitDelay}ms, trigger_fallback in ${fallbackDelay}ms`,
     );
 
-    // Schedule via Bull Queue with NestJS decorators
-    void this.closeCommitsQueue.add(
-      `closeCommits-${auctionStateId}`,
+    // jobId = dedup key: BullMQ silently ignores add() if a job with the same
+    // jobId already exists (waiting/delayed). Safe to call on restart recovery.
+    await this.closeCommitsQueue.add(
+      'closeCommits',
       { auctionStateId, localBatchId },
-      { delay: commitDelay, removeOnComplete: true },
+      {
+        delay: commitDelay,
+        jobId: `closeCommits-${auctionStateId}`,
+        removeOnComplete: true,
+        removeOnFail: 50,
+        attempts: 3,
+        backoff: { type: 'fixed', delay: 5_000 },
+      },
     );
 
-    void this.triggerFallbackQueue.add(
-      `triggerFallback-${auctionStateId}`,
+    await this.triggerFallbackQueue.add(
+      'triggerFallback',
       { auctionStateId, localBatchId },
-      { delay: fallbackDelay, removeOnComplete: true },
+      {
+        delay: fallbackDelay,
+        jobId: `triggerFallback-${auctionStateId}`,
+        removeOnComplete: true,
+        removeOnFail: 50,
+        attempts: 3,
+        backoff: { type: 'fixed', delay: 5_000 },
+      },
     );
   }
 }

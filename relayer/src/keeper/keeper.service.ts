@@ -97,8 +97,7 @@ export class KeeperService implements OnModuleInit {
       ]);
 
       // Schedule close_commits and trigger_fallback timers
-
-      this.lifecycle.scheduleBatch(result);
+      await this.lifecycle.scheduleBatch(result);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

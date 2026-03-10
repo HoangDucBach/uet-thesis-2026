@@ -1,5 +1,6 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -18,17 +19,16 @@ import { ScannerModule } from './scanner/scanner.module';
     ContractModule,
     ChainModule,
     GrpcModule,
-    BullModule.forRoot({
-      connection: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379'),
-        password: process.env.REDIS_PASSWORD || undefined,
-      },
+    BullModule.forRootAsync({
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD') || undefined,
+        },
+      }),
+      inject: [ConfigService],
     }),
-    BullModule.registerQueue(
-      { name: 'lifecycleCloseCommits' },
-      { name: 'lifecycleTriggerFallback' },
-    ),
     KeeperModule,
     ScannerModule,
   ],

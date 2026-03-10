@@ -28,12 +28,10 @@ import { TriggerFallbackProcessor } from './trigger-fallback.processor';
     ContractModule,
     ConfigModule,
     GrpcModule,
-    BullModule.registerQueue({
-      name: 'lifecycleCloseCommits',
-    }),
-    BullModule.registerQueue({
-      name: 'lifecycleTriggerFallback',
-    }),
+    BullModule.registerQueue(
+      { name: 'lifecycleCloseCommits' },
+      { name: 'lifecycleTriggerFallback' },
+    ),
   ],
   providers: [
     EventHandlerRegistry,
