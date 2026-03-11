@@ -733,6 +733,40 @@ class SolverA {
 
   // ─── Commit ────────────────────────────────────────────────────────────────
 
+  private validateSurplus(solution: BatchSolution): void {
+    let calculatedTotal = 0n;
+
+    for (const pair of solution.cowPairs) {
+      if (pair.surplusA < 0n || pair.surplusB < 0n) {
+        throw new Error(
+          `[SolverA] Invalid negative surplus in CoW pair: surplusA=${pair.surplusA}, surplusB=${pair.surplusB}`,
+        );
+      }
+      const pairTotal = pair.surplusA + pair.surplusB;
+      if (pairTotal !== pair.totalSurplus) {
+        throw new Error(
+          `[SolverA] CoW pair surplus mismatch: surplusA + surplusB = ${pairTotal}, but totalSurplus = ${pair.totalSurplus}`,
+        );
+      }
+      calculatedTotal += pairTotal;
+    }
+
+    for (const route of solution.ammRoutes) {
+      if (route.estimatedSurplus < 0n) {
+        throw new Error(
+          `[SolverA] Invalid negative surplus in AMM route: estimatedSurplus=${route.estimatedSurplus}`,
+        );
+      }
+      calculatedTotal += route.estimatedSurplus;
+    }
+
+    if (calculatedTotal !== solution.totalSurplus) {
+      throw new Error(
+        `[SolverA] Solution surplus mismatch: sum of all surplus = ${calculatedTotal}, but solution.totalSurplus = ${solution.totalSurplus}`,
+      );
+    }
+  }
+
   private buildCommitTx(solution: BatchSolution): Transaction {
     const tx = new Transaction();
     const [bond] = tx.splitCoins(tx.gas, [tx.pure.u64(CONFIG.MIN_BOND_MIST)]);
@@ -756,6 +790,7 @@ class SolverA {
     const MAX_RETRIES = 3;
 
     try {
+      this.validateSurplus(solution);
       const result = await this.executor.executeTransaction(
         this.buildCommitTx(solution),
         { effects: true },
@@ -930,15 +965,19 @@ class SolverA {
     console.debug(`[CoW] payoutToA=${pair.payoutToA} ${shortType(intentA.buyType)}, payoutToB=${pair.payoutToB} ${shortType(intentB.buyType)}`);
 
     const [sellCoinA] = tx.moveCall({
-      target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intentA.sellType, intentA.buyType, baseType, quoteType],
-      arguments: [ticket, tx.object(intentA.intentId), coinForA!, tx.object(poolId), tx.pure.bool(isBaseToQuote), tx.object.clock()],
+      target: isBaseToQuote
+        ? `${CONFIG.PACKAGE_ID}::settlement::process_intent_base_to_quote`
+        : `${CONFIG.PACKAGE_ID}::settlement::process_intent_quote_to_base`,
+      typeArguments: [baseType, quoteType],
+      arguments: [ticket, tx.object(intentA.intentId), coinForA!, tx.object(poolId), tx.object.clock()],
     });
 
     const [sellCoinB] = tx.moveCall({
-      target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intentB.sellType, intentB.buyType, baseType, quoteType],
-      arguments: [ticket, tx.object(intentB.intentId), coinForB!, tx.object(poolId), tx.pure.bool(isBaseToQuote), tx.object.clock()],
+      target: isBaseToQuote
+        ? `${CONFIG.PACKAGE_ID}::settlement::process_intent_quote_to_base`
+        : `${CONFIG.PACKAGE_ID}::settlement::process_intent_base_to_quote`,
+      typeArguments: [baseType, quoteType],
+      arguments: [ticket, tx.object(intentB.intentId), coinForB!, tx.object(poolId), tx.object.clock()],
     });
 
     // sellCoinA = A.sellAmount (> payoutToB - profit), sellCoinB = B.sellAmount (> payoutToA - profit)
@@ -1003,10 +1042,14 @@ class SolverA {
     const [coinForSmall] = tx.splitCoins(masterSellLarge, [tx.pure.u64(payoutToSmall)]);
 
     // ── Step 2: process_intent(small) - sellCoinSmall (= small.sellAmount of large's BUY type) ──
+    const largeIsA = largerSide === 'A';
+    const smallUseBaseToQuote = largeIsA ? !isBaseToQuote : isBaseToQuote;
     const [sellCoinSmall] = tx.moveCall({
-      target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [small.sellType, small.buyType, baseType, quoteType],
-      arguments: [ticket, tx.object(small.intentId), coinForSmall!, tx.object(poolId), tx.pure.bool(isBaseToQuote), tx.object.clock()],
+      target: smallUseBaseToQuote
+        ? `${CONFIG.PACKAGE_ID}::settlement::process_intent_base_to_quote`
+        : `${CONFIG.PACKAGE_ID}::settlement::process_intent_quote_to_base`,
+      typeArguments: [baseType, quoteType],
+      arguments: [ticket, tx.object(small.intentId), coinForSmall!, tx.object(poolId), tx.object.clock()],
     });
     console.debug(`[Hybrid-${largerSide}] sellCoinSmall: ${sellCoinSmall ? 'OK' : 'UNDEFINED'}`);
 
@@ -1019,10 +1062,13 @@ class SolverA {
     console.debug(`[Hybrid-${largerSide}] coinForLarge = ${small.sellAmount} + ${ammSupplement} = payoutToLarge`);
 
     // ── Step 5: process_intent(large, coinForLarge) - sellCoinLarge (= large.sellAmount of large's SELL type) ──
+    const largeUseBaseToQuote = largeIsA ? isBaseToQuote : !isBaseToQuote;
     const [sellCoinLarge] = tx.moveCall({
-      target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [large.sellType, large.buyType, baseType, quoteType],
-      arguments: [ticket, tx.object(large.intentId), sellCoinSmall!, tx.object(poolId), tx.pure.bool(isBaseToQuote), tx.object.clock()],
+      target: largeUseBaseToQuote
+        ? `${CONFIG.PACKAGE_ID}::settlement::process_intent_base_to_quote`
+        : `${CONFIG.PACKAGE_ID}::settlement::process_intent_quote_to_base`,
+      typeArguments: [baseType, quoteType],
+      arguments: [ticket, tx.object(large.intentId), sellCoinSmall!, tx.object(poolId), tx.object.clock()],
     });
     console.debug(`[Hybrid-${largerSide}] sellCoinLarge: ${sellCoinLarge ? 'OK' : 'UNDEFINED'}`);
 
@@ -1068,8 +1114,6 @@ class SolverA {
     const { intent, poolKey, isBaseToQuote } = route;
     const pool = this.oracle.resolvePool(intent.sellType, intent.buyType)!;
     const poolId = this.resolveDeepBookPoolId(poolKey);
-    const baseType = isBaseToQuote ? intent.sellType : intent.buyType;
-    const quoteType = isBaseToQuote ? intent.buyType : intent.sellType;
 
     const payoutRaw = route.estimatedOut;
     const sellDecimals = isBaseToQuote
@@ -1087,9 +1131,9 @@ class SolverA {
 
     // ── Step 2: process_intent - user gets estimatedOut; solver gets intent.sellAmount of sellType ──
     const [sellCoin] = tx.moveCall({
-      target: `${CONFIG.PACKAGE_ID}::settlement::process_intent`,
-      typeArguments: [intent.sellType, intent.buyType, baseType, quoteType],
-      arguments: [ticket, tx.object(intent.intentId), coinForUser!, tx.object(poolId), tx.pure.bool(isBaseToQuote), tx.object.clock()],
+      target: `${CONFIG.PACKAGE_ID}::settlement::${isBaseToQuote ? 'process_intent_base_to_quote' : 'process_intent_quote_to_base'}`,
+      typeArguments: [intent.sellType, intent.buyType],
+      arguments: [ticket, tx.object(intent.intentId), coinForUser!, tx.object(poolId), tx.object.clock()],
     });
     console.debug(`[AMM] sellCoin: ${sellCoin ? 'OK' : 'UNDEFINED'}`);
 
