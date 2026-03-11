@@ -4,6 +4,7 @@ use cow_dex::config::GlobalConfig;
 use cow_dex::intent_book::{Self, Intent};
 use cow_dex::math;
 use deepbook::pool::Pool as DeepbookPool;
+use std::u64;
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::Coin;
@@ -23,6 +24,11 @@ const EInvalidDeadline: u64 = 5;
 const EWrongBatch: u64 = 6;
 const EDuplicateCommit: u64 = 7;
 const EIncompleteBatch: u64 = 8;
+
+// === Constants ===
+
+const SLIPPAGE_TOLERANCE_NUM: u128 = 99;
+const SLIPPAGE_TOLERANCE_DENOM: u128 = 100;
 
 // === Enums ===
 
@@ -146,18 +152,18 @@ fun calculate_price_floor<Base, Quote>(
     let mid_price = if (is_base_to_quote) {
         pool_mid_price
     } else {
-        let flipped_u128 = (scaling as u128) * (scaling as u128) / (pool_mid_price as u128);
+        let flipped_u128 = (scaling  * scaling) / (pool_mid_price as u128);
         assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
         (flipped_u128 as u64)
     };
-    let fair_out_u128 = (amount as u128) * (mid_price as u128) / (scaling as u128);
+    let fair_out_u128 = (amount as u128) * (mid_price as u128) / scaling;
     assert!(fair_out_u128 <= math::max_u64(), EClearingPriceMismatch);
     let fair_out = (fair_out_u128 as u64);
 
-    let slippage_u128 = (fair_out as u128) * 99u128 / 100u128;
+    let slippage_u128 = (fair_out as u128) * SLIPPAGE_TOLERANCE_NUM / SLIPPAGE_TOLERANCE_DENOM;
     assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
     let slippage_protection = (slippage_u128 as u64);
-    math::max_u64_val(user_min_out, slippage_protection)
+    u64::max(user_min_out, slippage_protection)
 }
 
 /// Initialize global batch counter.
@@ -270,8 +276,6 @@ public fun commit(
         state.winner_score = score;
     } else {
         let current_winner = *state.winner.borrow();
-        let entry_ref = state.commits.borrow(current_winner);
-        let current_winner_timestamp = entry_ref.timestamp;
 
         if (score > state.winner_score) {
             state.runner_up = option::some(current_winner);
@@ -281,10 +285,6 @@ public fun commit(
         } else if (score > state.runner_up_score) {
             state.runner_up = option::some(sender);
             state.runner_up_score = score;
-        } else if (score == state.winner_score && current_time_ms < current_winner_timestamp) {
-            state.runner_up = option::some(current_winner);
-            state.runner_up_score = state.winner_score;
-            state.winner = option::some(sender);
         };
     };
 }
@@ -340,32 +340,24 @@ public fun open_settlement(
     }
 }
 
-/// Process a single intent.
+/// Process intent selling Base and buying Quote.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: Intent<SellCoin, BuyCoin>.
-/// * `payout`: Solver's payout coin of type BuyCoin.
-/// * `pool`: DeepBook pool (Base, Quote order — may be reversed relative to intent).
-/// * `is_base_to_quote`: true if pool's base matches SellCoin direction.
+/// * `intent`: Intent<Base, Quote> — selling Base, buying Quote.
+/// * `payout`: Coin<Quote> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
 /// * `clock`: Sui clock for DeepBook mid_price calculation.
 /// * `ctx`: Transaction context.
 ///
-/// Type Parameters:
-/// * `SellCoin`: Coin type user was selling.
-/// * `BuyCoin`: Coin type user is receiving.
-/// * `Base`: Pool's base coin type.
-/// * `Quote`: Pool's quote coin type.
-///
-/// Returns: `Coin<SellCoin>` — sell coin released from the intent for solver.
-public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
+/// Returns: `Coin<Base>` — base coin released from the intent for solver.
+public fun process_intent_base_to_quote<Base, Quote>(
     ticket: &mut SettlementTicket,
-    intent: Intent<SellCoin, BuyCoin>,
-    payout: Coin<BuyCoin>,
+    intent: Intent<Base, Quote>,
+    payout: Coin<Quote>,
     pool: &DeepbookPool<Base, Quote>,
-    is_base_to_quote: bool,
     clock: &Clock,
     ctx: &mut TxContext,
-): Coin<SellCoin> {
+): Coin<Base> {
     let intent_id_val = intent_book::intent_id(&intent);
     vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
 
@@ -374,7 +366,7 @@ public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
 
     let price_floor = calculate_price_floor(
         pool,
-        is_base_to_quote,
+        true,
         sell_amount,
         min_amount_out,
         clock,
@@ -383,40 +375,75 @@ public fun process_intent<SellCoin, BuyCoin, Base, Quote>(
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
     transfer::public_transfer(payout, owner);
 
-    // 5. Return sell coin to solver for flashloan repayment / swap
     sell_balance.into_coin(ctx)
 }
 
-/// Process a partial fill for a partial_fillable intent.
-/// Intent is mutated but NOT deleted — stay on-chain.
-/// Protocol directly transfers the payout to the intent owner — solver cannot intercept.
-/// Returns only the partial sell coin for the solver to route.
+/// Process intent selling Quote and buying Base.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: &mut Intent.
-/// * `fill_amount`: SellCoin units to fill this round.
-/// * `payout`: Solver's payout of BuyCoin for this partial fill.
-/// * `pool`: DeepBook pool (Base, Quote order — may be reversed relative to intent).
-/// * `is_base_to_quote`: true if pool's base matches SellCoin direction.
+/// * `intent`: Intent<Quote, Base> — selling Quote, buying Base.
+/// * `payout`: Coin<Base> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
+/// * `clock`: Sui clock for DeepBook mid_price calculation.
+/// * `ctx`: Transaction context.
+///
+/// Returns: `Coin<Quote>` — quote coin released from the intent for solver.
+public fun process_intent_quote_to_base<Base, Quote>(
+    ticket: &mut SettlementTicket,
+    intent: Intent<Quote, Base>,
+    payout: Coin<Base>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<Quote> {
+    let intent_id_val = intent_book::intent_id(&intent);
+    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
+
+    let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
+    let sell_amount = sell_balance.value();
+
+    let price_floor = calculate_price_floor(
+        pool,
+        false,
+        sell_amount,
+        min_amount_out,
+        clock,
+    );
+
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
+
+    transfer::public_transfer(payout, owner);
+
+    sell_balance.into_coin(ctx)
+}
+
+/// Process partial fill for intent selling Base and buying Quote.
+/// Intent is mutated but NOT deleted — stay on-chain.
+///
+/// * `ticket`: SettlementTicket.
+/// * `intent`: &mut Intent<Base, Quote> — selling Base, buying Quote.
+/// * `fill_amount`: Base units to fill this round.
+/// * `payout`: Coin<Quote> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
 /// * `clock`: Sui clock.
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `Coin<SellCoin>` — partial sell coin released from the intent for solver.
-public fun process_intent_partial<SellCoin, BuyCoin, Base, Quote>(
+/// Returns: `Coin<Base>` — partial base coin released from the intent for solver.
+public fun process_intent_partial_base_to_quote<Base, Quote>(
     ticket: &mut SettlementTicket,
-    intent: &mut Intent<SellCoin, BuyCoin>,
+    intent: &mut Intent<Base, Quote>,
     fill_amount: u64,
-    payout: Coin<BuyCoin>,
+    payout: Coin<Quote>,
     pool: &DeepbookPool<Base, Quote>,
-    is_base_to_quote: bool,
     clock: &Clock,
     ctx: &mut TxContext,
-): Coin<SellCoin> {
+): Coin<Base> {
     let intent_id_val = intent_book::intent_id(intent);
     assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
+    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
 
     let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
@@ -425,7 +452,7 @@ public fun process_intent_partial<SellCoin, BuyCoin, Base, Quote>(
 
     let price_floor = calculate_price_floor(
         pool,
-        is_base_to_quote,
+        true,
         fill_amount,
         proportional_min_out,
         clock,
@@ -434,10 +461,54 @@ public fun process_intent_partial<SellCoin, BuyCoin, Base, Quote>(
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
 
-    // 4. Protocol guarantees delivery — transfer directly to owner, solver cannot intercept
     transfer::public_transfer(payout, owner);
 
-    // 5. Return partial sell coin to solver for flashloan repayment / swap
+    partial_sell_balance.into_coin(ctx)
+}
+
+/// Process partial fill for intent selling Quote and buying Base.
+/// Intent is mutated but NOT deleted — stay on-chain.
+///
+/// * `ticket`: SettlementTicket.
+/// * `intent`: &mut Intent<Quote, Base> — selling Quote, buying Base.
+/// * `fill_amount`: Quote units to fill this round.
+/// * `payout`: Coin<Base> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
+/// * `clock`: Sui clock.
+/// * `ctx`: Transaction context.
+///
+/// Returns: `Coin<Quote>` — partial quote coin released from the intent for solver.
+public fun process_intent_partial_quote_to_base<Base, Quote>(
+    ticket: &mut SettlementTicket,
+    intent: &mut Intent<Quote, Base>,
+    fill_amount: u64,
+    payout: Coin<Base>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<Quote> {
+    let intent_id_val = intent_book::intent_id(intent);
+    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
+    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
+
+    let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
+        intent,
+        fill_amount,
+    );
+
+    let price_floor = calculate_price_floor(
+        pool,
+        false,
+        fill_amount,
+        proportional_min_out,
+        clock,
+    );
+
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
+
+    transfer::public_transfer(payout, owner);
+
     partial_sell_balance.into_coin(ctx)
 }
 
@@ -531,6 +602,8 @@ public fun unlock_batch_intent<SellCoin, BuyCoin>(
         state.phase == AuctionPhase::Aborted,
         EWrongPhase,
     );
+    let intent_id_val = intent_book::intent_id(intent);
+    assert!(vec_set::contains(&state.intent_ids, &intent_id_val), EWrongBatch);
     intent_book::unlock_intent(intent);
 }
 
