@@ -21,12 +21,24 @@ This thesis addresses the gap between the theoretical promise of the CoW model a
 
 \section{Problem Statement}
 
-\blindtext
+Although the Coincidence of Wants model has demonstrated its effectiveness in optimizing trade execution and reducing slippage on Ethereum, its application within the Sui ecosystem remains largely unexplored. This thesis identifies four core problems that motivate the proposed design.
 
-\section{Research Objectives}
+\textbf{P1 --- Absence of a CoW-based Protocol on Sui}
 
-\blindtext
+Despite the significant growth of Sui's DeFi ecosystem --- with total DEX volume exceeding \$33 billion in Q2 2025 alone \cite{SuiQ220252025} --- no major protocol operating on the CoW batch auction model currently exists on the network. Existing protocols, including AMMs such as Cetus, Bluefin, and Aftermath, and aggregators such as 7k and FlowX, operate independently and lack a coordination layer capable of identifying and exploiting coincidence-of-wants opportunities across concurrent trade intents. As a consequence, liquidity remains fragmented across isolated pools, and users continue to incur unnecessary slippage even in market conditions where sufficient opposing intent volume exists. The absence of a CoW-style meta-DEX aggregator means the Sui ecosystem foregoes the possibility of zero-slippage execution in eligible trade conditions, while leaving unexploited the natural alignment between Sui's object-centric architecture and the intent-based trading model.
 
-\section{Contributions}
+\textbf{P2 --- Off-chain Trust Assumptions and Permission Risk in Existing CoW Implementations}
 
-\blindtext
+The architecture of CoW Protocol on Ethereum relies substantially on off-chain infrastructure for core protocol functions, including intent relaying, solver coordination, and price verification. This design reintroduces dependence on trusted intermediaries --- a dependency that decentralized finance is fundamentally intended to eliminate. The practical consequences of this trust assumption have been demonstrated through two documented incidents. First, an exploit targeting CoW Protocol's solver network resulted in direct user fund losses \cite{cowswapsolverexploit}. Second, a separate incident in which the off-chain permission and approval model caused a user to lose approximately \$50 million in a misrouted trade --- receiving only a \$600,000 fee refund as compensation \cite{sinclairCryptoTraderLoses2026}. Both cases illustrate that when critical execution decisions are processed off-chain, users cannot rely on smart contract guarantees to protect their assets. A genuinely trustless system requires that the entire transaction lifecycle --- intent locking, solver competition, price verification, and settlement --- be enforced and verifiable on-chain.
+
+\textbf{P3 --- High Operational Cost and Solver Capital Inefficiency}
+
+On Ethereum-based deployments, high gas costs impose two structural constraints on the efficiency of the CoW model. First, per-transaction costs force solvers to accumulate a sufficient number of intents before a batch becomes economically viable, resulting in extended user wait times. In practice, CoW Protocol on Ethereum processes batches approximately every ten minutes \cite{BatchHistoryDune2023}, during which users have no execution guarantee. Second, solvers must maintain substantial capital reserves to fund settlement for complex batches, creating high barriers to entry and limiting competition within the solver network. On Sui, significantly lower gas fees and sub-second transaction finality open the possibility of high-frequency batch processing --- enabling what may be characterized as micro-batching. Furthermore, Sui's Programmable Transaction Block (PTB) mechanism allows solvers to source on-chain liquidity from DeepBook within the same atomic transaction as settlement, reducing capital requirements to near zero and lowering the barrier for solver participation.
+
+\textbf{P4 --- Liquidity Fragmentation and the Absence of an Optimal Routing Layer}
+
+Even in the absence of direct peer-to-peer matching opportunities, users on Sui face the challenge of identifying optimal execution paths across fragmented liquidity venues. Existing aggregators address this partially by routing individual orders across multiple pools, but they operate reactively --- processing each order in isolation as it arrives, without the ability to combine concurrent intents and exploit potential CoW matches within a shared time window. As a result, a meaningful portion of trades continues to incur unnecessary slippage by being routed through AMM pools when a directly opposing intent, submitted within the same batch window, could have fulfilled the order at a better price. A meta-aggregator built on the batch auction model can address both dimensions simultaneously: maximizing the probability of peer-to-peer CoW matching and guaranteeing optimal AMM routing for residual unmatched volume.
+
+% \section{Research Objectives}
+
+% \section{Contributions}
