@@ -48,6 +48,13 @@ Cargo.lock
 *.synctex.gz
 *.toc
 *.nlo
+*.acn
+*.acr
+*.alg
+*.glg
+*.gls
+*.glsdefs
+*.xdy
 
 # Keep source files and final PDF
 !*.tex
