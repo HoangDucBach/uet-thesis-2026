@@ -5,6 +5,13 @@
 
 The emergence of blockchain technology has catalyzed a fundamental transformation in financial infrastructure, giving rise to a new class of decentralized financial systems that operate without traditional intermediaries. As of early 2026, global DeFi Total Value Locked (TVL) stands at approximately \$125 billion — a figure that, despite a seasonal correction from the mid-2025 peak of \$2.6 billion on Sui alone, reflects the enduring adoption and long-term growth trajectory of on-chain finance. Within this ecosystem, decentralized exchanges (DEXs) have emerged as the primary venue for permissionless asset trading, sustaining an average global daily volume of approximately \$19 billion throughout 2025 and into 2026, with Sui-native DEXs contributing approximately \$250 million daily \cite{SuiQ220252025}.
 
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/fig-1-2-defi-and-dex-reports-by-defillama.png}
+    \caption{Global DeFi and DEX TVL trends (2018--2026).}
+    \label{fig:defi-tvl-global}
+\end{figure}
+
 As highlighted in the OKX State of DEXs 2025 Report, the central promise of decentralized trading is the delivery of low slippage and best-price execution. Since the inception of DEXs in 2018, successive architectural generations have pursued this goal through distinct mechanisms. Automated Market Makers (AMMs) democratized liquidity provision but introduced price impact proportional to trade size. Order book DEXs improved price precision but required active market participation and remained susceptible to liquidity fragmentation. DEX Aggregators improved execution by routing across multiple venues, yet remained fundamentally constrained by the depth of underlying pools. Hybrid models combine these approaches at the cost of architectural complexity. Each generation represents an incremental improvement; none fully resolves the slippage problem under fragmented liquidity conditions.
 
 It is in this context that Maximal Extractable Value (MEV) emerges as a critical phenomenon. MEV refers to the profit that block producers and sophisticated market participants can extract by strategically reordering, including, or excluding transactions within a block prior to finalization \cite{WhatMaximalExtractable}. This is made possible by the public visibility of pending transactions in the mempool: before a trade is confirmed, its parameters are observable by any network participant. Searchers — automated agents monitoring the mempool — exploit this transparency to execute three primary forms of MEV extraction. In \textbf{front-running}, a searcher identifies a profitable pending trade and submits an identical transaction with a higher priority fee, ensuring execution ahead of the original user and capturing the resulting price movement. In a \textbf{sandwich attack}, the attacker places a buy order immediately before the target transaction and a sell order immediately after, artificially inflating the execution price for the victim while profiting from the induced price delta. In \textbf{back-running}, the attacker inserts a transaction directly following a price-moving event to capture the resulting arbitrage opportunity before the market equilibrates \cite{WhatMaximalExtractable}.
@@ -13,7 +20,21 @@ The implications of MEV extend beyond individual transaction losses. At scale, M
 
 In response to MEV's growing impact, multiple mitigation approaches have emerged. Flashbots introduced private transaction relaying to reduce mempool exposure; ZeroMEV developed analytics tooling to quantify and attribute extracted value; and CoW Protocol introduced a structurally distinct execution model. Proposed in 2021, CoW Protocol's \textbf{Coincidence of Wants} mechanism batches user trade intents and searches for peer-to-peer matches — settling directly between counterparties before routing residual volume to external liquidity sources. When a user intending to swap token A for token B is matched with a counterparty intending the inverse trade, both orders are settled at the reference market price with zero AMM fee and zero price impact. This batch auction model simultaneously eliminates MEV exposure, reduces slippage, and recovers surplus for users rather than extractors. According to on-chain data from Dune Analytics, even on Ethereum the average CoW batch contains approximately 1.5 intents, illustrating that peer-to-peer matching remains probabilistic and volume-dependent \cite{BatchHistoryDune2023}.
 
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/fig-1-1-batch-of-cow-reports-by-dune.png}
+    \caption{CoW Protocol batch history on Ethereum.}
+    \label{fig:cow-batch-history}
+\end{figure}
+
 On Sui, MEV is addressed through a different set of architectural mechanisms — including priority gas auctions (PGAs) and consensus amplification via SIP-45 — with the explicit design principle that user transaction protection takes priority over extracted value \cite{MEVSuiCurrent2025}. As a result, the MEV problem that primarily motivates CoW on Ethereum is partially mitigated by Sui's protocol design. Nevertheless, the CoW model retains a powerful and distinct advantage: the ability to achieve \textbf{zero slippage} when sufficient matching volume exists. Furthermore, a CoW-style protocol on Sui does not compete with or displace existing DEXs. Rather, it functions as a \textbf{meta-DEX aggregator} that discovers and exploits better pricing across Cetus, Aftermath, DeepBook, and other Sui protocols — reducing liquidity fragmentation rather than adding to it. As confirmed by the Sui Q2 2025 DeFi Roundup \cite{SuiQ220252025}, AMMs and aggregators currently dominate Sui DeFi volume, and no major CoW-style batch auction protocol exists on the network, representing a clear gap in the ecosystem.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/fig-1-2-defi-and-dex-on-sui-reports-by-defillama.png}
+    \caption{Sui DeFi ecosystem: AMMs and aggregators dominance (Q2 2025).}
+    \label{fig:sui-dex-ecosystem}
+\end{figure}
 
 Understanding the behavior, scale, and distribution of MEV — as well as the effectiveness of countermeasures such as CoW-style batch auctions — has become essential for designing fair and efficient decentralized trading systems. However, existing implementations of CoW Protocol on Ethereum rely on off-chain infrastructure for solver coordination, intent relay, and price verification, reintroducing trusted intermediaries whose failure modes have been demonstrated in practice: a solver network exploit resulted in direct fund losses, and a separate incident in which the off-chain permission model caused a user to lose nearly \$50 million in a misrouted trade — both illustrating the systemic risk of off-chain trust assumptions \cite{sinclairCryptoTraderLoses2026}.
 
