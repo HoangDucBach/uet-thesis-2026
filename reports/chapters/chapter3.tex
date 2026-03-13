@@ -1,11 +1,208 @@
-\chapter{System Analysis and Design}
+\chapter{Intent-Based Model and CoW Mechanism on Sui}
 
-\newthought{Lorem ipsum dolor sit amet}, consectetuer adipiscing elit. Morbi commodo, ipsum sed pharetra gravida, orci magna rhoncus neque, id pulvinar odio lorem non turpis. Nullam sit amet enim. Suspendisse id velit vitae ligula volutpat condimentum. Aliquam erat volutpat. Sed quis velit. Nulla facilisi. Nulla libero. Vivamus pharetra posuere sapien. Nam consectetuer. Sed aliquam, nunc eget euismod ullamcorper, lectus nunc ullamcorper orci, fermentum bibendum enim nibh eget ipsum. Donec porttitor ligula eu dolor. Maecenas vitae nulla consequat libero cursus venenatis. Nam magna enim, accumsan eu, blandit sed, blandit a, eros.
+\section{Overview of CoW Protocol}
 
-\blindtext
+\subsection{Architecture and Design Philosophy}
 
-\section{This is section one}
-\blindtext
+CoW Protocol functions as a coordination layer that aggregates liquidity across multiple sources, including on-chain AMMs and order book DEXs as well as off-chain market makers and CEX inventory \cite{DocumentationCoWDAO}. Unlike traditional DEXs, where users bear responsibility for selecting execution routes and managing associated risks, CoW Protocol instead delegates these decisions to a competitive network of solvers. The protocol enforces constraints designed to protect user outcomes.
 
-\section{This is section two}
-\blindtext
+The protocol relies on a network of solvers that discover execution opportunities by scanning available liquidity across multiple venues. This includes on-chain AMMs, DEX aggregators, private market makers, and peer-to-peer matching opportunities between intents within the same batch. Solvers compete by proposing solutions that maximize total surplus across all batch participants, with the winning solver compensated in COW tokens.
+
+\subsection{Order Flow}
+
+A trade on CoW Protocol involves several phases as documented by the protocol authors \cite{DocumentationCoWDAO}. Users first submit trade intents off-chain by signing messages that specify desired assets and minimum acceptable prices. At this stage, user assets are not locked. Instead, users must have previously authorized CoW Protocol's vault relayer via ERC-20 \texttt{approve} \cite{erc20tokenstandard}, granting it permission to move tokens on their behalf.
+
+The protocol then aggregates intents into a Fair Combinatorial Batch Auction. After a batch closes, no new intents can be added, and the solver competition begins. Solvers have approximately 36 seconds (three blocks on Ethereum Mainnet) to propose solutions via an off-chain coordination component called the Autopilot. Because the auction operates entirely off-chain and remains opaque to all participants, solvers cannot observe each other's proposals before submission.
+
+Finally, the winning solver submits a settlement transaction on-chain. The \texttt{GPv2Settlement} smart contract verifies each intent's signature and enforces the minimum price constraint. If execution prices fall below user-specified minimums, the transaction reverts immediately.
+
+\subsection{Enforcement Architecture}
+
+CoW Protocol distributes enforcement responsibilities across three distinct layers, each with specific scope.
+
+The smart contract layer enforces two core constraints: limit prices and solver authorization. The protocol verifies that execution respects user-specified minimum thresholds and restricts settlement submissions to whitelisted solver addresses.
+
+On-chain enforcement alone cannot handle the full complexity of the auction process. The off-chain Autopilot layer computes solver scores, validates pricing, and selects winners \cite{documentationcowdaoa}. On Ethereum, such computation is prohibitively expensive on-chain, creating a structural dependence on this centralized component. Additionally, CoW DAO's governance process enforces social consensus rules around surplus allocation and buffer usage, rather than through code.
+
+This design reflects a fundamental constraint in Ethereum: on-chain computation costs make complex auction logic prohibitively expensive. While Autopilot addresses this need, it introduces a critical centralization point whose failure modes have been demonstrated in practice.
+
+\subsection{Fair Combinatorial Batch Auction}
+
+CoW Protocol's auction mechanism, termed Fair Combinatorial Auction \cite{documentationcowdaob}, selects winners through combinatorial optimization over solution sets. Solvers can submit individual bids targeting single intents or batched bids covering multiple intents. The Autopilot evaluates these submissions in stages.
+
+First, for each token pair and direction, the Autopilot identifies the best individual bid. This establishes a reference price representing the best achievable execution against external liquidity. Next, it filters solutions that underperform this reference, discarding any that deliver less surplus than the baseline for any token pair. Finally, it selects the combination maximizing total surplus, subject to the constraint that all intents within a directed pair must use the same clearing price.
+
+This mechanism enforces Uniform Directional Clearing Price (UDCP) \cite{documentationcowdaoa}, ensuring that within a single solution, all intents trading the same token pair in the same direction receive the same exchange rate. By decoupling execution prices from transaction ordering, this property prevents MEV sandwich attacks.
+
+\subsection{Forms of Coincidence of Wants}
+
+CoW matching can take several forms, depending on the structure of the trading pair \cite{nagCoincidenceWantsMechanism2025}.
+
+When two users exchange exactly what the other seeks, a \textit{simple} CoW occurs with no intermediary liquidity needed. This may be complete, with both sides fully matched, or partial, where one side is fully filled while the other accesses external liquidity.
+
+Users selling in the same direction may be aggregated into a single transaction, reducing gas costs through \textit{batching}. Though this form still interacts with AMMs, it materially improves efficiency per intent.
+
+More complex forms include matches at intermediate tokens in multi-hop routes. For example, if user A routes CRV→ETH→USDT and user B routes USDT→ETH→COW, the ETH↔USDT leg can be settled peer-to-peer, requiring solvers capable of multi-step decomposition.
+
+Finally, \textit{ring trades} involve three or more users forming closed exchange cycles, where user A sells X for Y, user B sells Y for Z, and user C sells Z for X. Finding such cycles requires sophisticated optimization.
+
+\subsection{The Solver Whitelist Mechanism}
+
+CoW Protocol requires solver authorization, though the reasons are often misunderstood. The whitelist is not primarily a mechanism to prevent price manipulation—the smart contract's limit price constraint and EVM revert already handle that. Instead, it serves two operational functions: protecting the centralized Autopilot from DDoS attacks via spam submissions, and ensuring that winning solvers actually execute within the required deadline.
+
+This design introduces a tension: the Autopilot's necessity to reduce on-chain costs requires protecting it from spam through a solver whitelist, which in turn becomes a centralization vector. The 2023 solver exploit illustrates this risk \cite{cowswapsolverexploit}. When a whitelisted solver was compromised, the unlimited ERC-20 approvals previously granted to the vault relayer became an exploitable attack surface, resulting in direct fund losses. This incident demonstrates that architectures relying on privileged intermediaries to authorize asset movement carry systemic trust risks that governance alone cannot fully mitigate.
+
+\section{CoW Protocol on Ethereum versus the Proposed Design on Sui}
+
+\subsection{Structural Limitations of the Account-Based Model}
+
+CoW Protocol's design reflects constraints inherent to Ethereum's account-based model, where all state resides in a single global tree and every modification passes through sequential consensus. User intents exist off-chain as signed messages, with assets remaining in user wallets but authorized via ERC-20 \texttt{approve}. EVM revert guarantees atomicity, but winner selection logic must live off-chain due to computation costs.
+
+This architecture produces measurable limitations. All critical auction logic—score computation, winner selection, and UDCP and EBBO verification—depends on a centralized Autopilot, creating a single point of failure and potential censorship vector. The \texttt{approve} mechanism creates a persistent vulnerability: users typically grant unlimited approvals once, so any vault relayer vulnerability can drain entire balances \cite{sinclairCryptoTraderLoses2026}. Gas fee volatility on Ethereum also creates barriers to frequent batching. Although batch windows are ~36 seconds, solvers prioritize high-value intents, potentially leaving retail users with inconsistent execution priority.
+
+\subsection{Design Opportunities of Sui's Object Model}
+
+Sui applies an object-centric model where each unit of state exists as an object with a unique identifier and explicit owner. The Move language enforces object integrity through a linear type system: no object can be copied or destroyed arbitrarily, and ownership is tracked at the compiler level.
+
+This model enables three design improvements for CoW on Sui. First, intents can be represented as on-chain shared objects with assets locked directly via escrow, completely eliminating the \texttt{approve} pattern and closing the 2023 exploit's attack surface. Second, Sui's low and stable gas fees enable bringing the full auction logic on-chain through Commit-Reveal mechanisms, removing dependence on a centralized Autopilot. Third, stable transaction costs make frequent micro-batching (1–2 second intervals) economically sustainable, ensuring consistent execution regardless of intent size.
+
+CoW Protocol on Ethereum stores intents off-chain as signed messages with assets in user wallets, authorized via ERC-20 \texttt{approve}. On-chain, it enforces limit prices and solver whitelists, but the full auction logic including winner selection and EBBO verification \cite{documentationcowdaoa} occurs off-chain in the centralized Autopilot. The proposed design on Sui instead relocates intents on-chain as shared objects with assets locked directly via escrow, eliminates the approve requirement, brings all auction logic on-chain via Commit-Reveal, and enables permissionless solver participation through smart contract bonds rather than governance whitelists. Settlement atomicity is guaranteed through the Hot Potato pattern rather than EVM revert, and reduced transaction costs enable micro-batching at 1–2 second intervals instead of 36 seconds.
+
+\section{Proposed Model: On-Chain Intent-Based Batch Auction on Sui}
+
+\subsection{Intent as an On-Chain Shared Object}
+
+The core design choice is relocating the intent from an off-chain signed message to an on-chain shared object with locked assets.
+
+\begin{verbatim}
+struct Intent<phantom S, phantom B> has key {
+    id: UID,
+    owner: address,
+    sell_coin: Coin<S>,       // asset locked in the object at creation time
+    min_amount_out: u64,      // limit price: minimum tokens of type B to receive
+    deadline: u64,            // validity epoch
+    batch_id: Option<ID>,     // None if pending; Some if assigned to a batch
+}
+\end{verbatim}
+
+The distinction from CoW Protocol's approach lies in asset custody handling. Ethereum's account-based model requires users to grant ERC-20 \texttt{approve} to an intermediary contract so solvers can move assets—an authorization mechanism creating persistent attack surface. Sui's object-centric model has no equivalent approval concept. Assets are transferred entirely into the intent object at creation time through an on-chain escrow pattern. The \texttt{sell\_coin} is embedded directly within the Intent and governed entirely by Move's ownership system. No external address—including winning solvers—can access this asset except through contract-defined functions. The attack surface that enabled the 2023 exploit does not exist in this architecture.
+
+\subsection{On-Chain Batch Auction Lifecycle}
+
+The system operates through a continuous batch cycle with all phases enforced on-chain.
+
+During \textbf{intent collection}, users submit intents at any time. The intent pool remains continuously available without batch-window constraints on submission.
+
+In the \textbf{batch opening} phase, a keeper periodically calls \texttt{open\_batch}, locking the current pending set into a new batch and transitioning it to Commit phase. No new intents can be added after this point.
+
+During the \textbf{commit phase}, solvers compute solutions off-chain and submit \texttt{commit\_hash = hash(solution || nonce)} with an on-chain bond. Only a cryptographic hash is published, preventing solvers from extracting information about competitors' solutions from the chain. This provides confidentiality equivalent to CoW Protocol's off-chain Autopilot, without requiring a centralized coordinator.
+
+In the \textbf{reveal and winner selection} phase, after the commit window closes, each solver reveals their \texttt{nonce} to verify the previously submitted hash. The contract reads the \texttt{actual\_surplus} for each solution directly from on-chain batch state and selects the solver with the highest \texttt{total\_surplus} as the winner. The full solution is not re-submitted; all scoring information was recorded on-chain during the commit phase.
+
+During the \textbf{execute phase}, the winning solver constructs and executes the Programmable Transaction Block containing settlement logic. The winning solver's bond remains locked throughout this phase and is released only after \texttt{close\_settlement} confirms that \texttt{actual\_surplus} meets the committed threshold. Losing solvers' bonds are returned after a fixed waiting period without requiring any action.
+
+In the final \textbf{done or aborted} phase, the batch concludes. Any intents not processed are released back to the pending pool to participate in the next batch.
+
+\section{On-Chain Solver Selection via Commit-Reveal}
+
+\subsection{Why Commit-Reveal Rather Than Open Bid}
+
+On Ethereum, CoW Protocol operates with an open bid model because the auction is conducted off-chain and opaque to all participants—solvers submit solutions to Autopilot and cannot observe each other's proposals before the deadline. When the entire auction process moves on-chain on Sui, this condition changes: every transaction becomes publicly observable. If solver A submits a solution directly on-chain, solver B could read it from the mempool, copy it, and submit an identical transaction with a higher gas fee to be prioritized ahead—a classic solution front-running attack.
+
+Commit-Reveal addresses this by separating the auction into two temporally distinct phases. In the commit phase, solvers publish only the hash of their solution, revealing no exploitable information. Only after all commits are recorded does the reveal phase begin, at which point solution contents become visible. This approach replicates the confidentiality properties of CoW Protocol's off-chain auction on-chain, without delegating trust to a centralized coordinator.
+
+\subsection{Game-Theoretic Analysis of the Bond Mechanism}
+
+The solver bond serves multiple purposes beyond anti-spam functionality. It establishes a Nash equilibrium in the solver competition. Let $V$ denote the reward for the winning solver, $B$ the bond value, and $p$ the probability that a given solver wins. The rational participation condition is \cite{nash1951noncooperativegames}:
+
+\[
+p \cdot V - (1 - p) \cdot B > 0 \implies p > \frac{B}{V + B}
+\]
+
+With $B$ calibrated appropriately, only solvers with sufficiently high confidence in their solution quality will participate. Two principal attack strategies are thereby eliminated: \textit{griefing}, where a solver submits a commit without a valid solution, is deterred because the bond is forfeited if the solver fails to reveal on time; and \textit{score inflation}, where a solver overstates the committed score and then executes below that level, is deterred by the \texttt{EScoreMismatch} penalty enforced on-chain.
+
+Most significantly, this mechanism enables permissionlessness: any party may participate as a solver without undergoing a DAO whitelist process. The bond substitutes for institutional trust—rather than relying on reputation and governance, the system relies on on-chain locked capital.
+
+\subsection{On-Chain Penalty Conditions}
+
+The contract enforces two penalty conditions that protect system integrity.
+
+\textbf{EScoreMismatch} is triggered when \texttt{actual\_surplus < committed\_score × 95\%}, upon which the solver's bond is forfeited. The 95\% threshold provides a buffer for small price movements between computation and execution, while remaining tight enough to deter material score inflation.
+
+\textbf{EDeadlineExpired} is triggered when the winning solver fails to execute settlement within the prescribed window after being selected, upon which the bond is also forfeited. This condition eliminates the ``win and abandon'' risk that CoW Protocol on Ethereum addresses through the solver whitelist, replacing an institutional guarantee with an economic one.
+
+\section{Type-Level Atomicity in Move}
+
+\subsection{EVM Revert versus Type-Level Correctness}
+
+In the EVM, settlement atomicity is guaranteed by the revert mechanism: if any step in settlement fails, the entire transaction is rolled back. This is a necessary but insufficient guarantee. It prevents incorrect settlement but does not prevent \textit{intentional partial settlement}, where a solver deliberately skips unprofitable intents while processing the remainder. If the contract does not explicitly check every intent in the batch, no revert will occur. The correctness of the system thus depends on the completeness of runtime validation logic—a significant attack surface in any complex multi-step contract.
+
+\subsection{The Hot Potato Pattern in Move}
+
+Move's linear type system provides a structurally stronger guarantee. A \textit{hot potato} is a struct that has neither the \texttt{drop} ability nor the \texttt{store} ability \cite{patternhotpotato}. As a direct consequence, a hot potato value, once created, \textit{must be consumed} by a designated function within the same transaction. It cannot be discarded, and it cannot be saved to storage. This is a compiler-enforced constraint, not a runtime check.
+
+\texttt{SettlementTicket} is designed as a hot potato:
+
+\begin{verbatim}
+struct SettlementTicket {   // no `drop`, no `store`
+    batch_id: ID,
+    intents_to_process: vector<ID>,  // must be fully emptied before closing
+    actual_surplus: u64,
+}
+\end{verbatim}
+
+The execution flow is strictly enforced by the type system:
+
+\begin{verbatim}
+open_settlement(state, clock) → SettlementTicket    // created; cannot be dropped
+      ↓
+process_intent<S,B>(ticket, intent, coin, ...)      // removes one intent from the list
+      ↓  [repeated for each intent in the batch]
+close_settlement(state, ticket, config)             // consumes the ticket; verifies surplus
+\end{verbatim}
+
+If the solver does not call \texttt{close\_settlement}, the \texttt{SettlementTicket} remains live at the end of the transaction and the Move VM rejects it. If the solver calls \texttt{close\_settlement} while \texttt{intents\_to\_process} is non-empty, the contract aborts. There is no escape path: partial settlement is not merely penalized—it is structurally impossible. This is \textit{type-level correctness}, elevating the guarantee from a runtime concern to a compile-time impossibility.
+
+\section{Matching Algorithm and Surplus Theory}
+
+\subsection{Surplus Definition and Winner Selection Metric}
+
+Consistent with CoW Protocol's definition, the surplus of an intent $i$ is the positive difference between the actual amount of tokens received $r_i$ and the user's minimum acceptable amount $m_i$:
+
+\[
+\text{surplus}_i = r_i - m_i \quad \text{subject to } r_i \geq m_i
+\]
+
+The total surplus of a batch serves as the on-chain metric for comparing solver solutions and selecting the winner:
+
+\[
+\text{Score} = \sum_{i \in \text{batch}} (r_i - m_i)
+\]
+
+This is consistent with CoW Protocol's principle that the solver wins precisely when users win. The proposed design applies \textit{individual pricing}, where each intent receives an execution price based on settlement conditions, rather than CoW Protocol's Uniform Directional Clearing Price, which requires all intents within a directed pair to receive the same rate. Individual pricing offers greater optimization flexibility and is appropriate for Sui's high-frequency, small-batch environment, where enforcing UDCP across a few intents would provide limited fairness benefit relative to the added complexity.
+
+\subsection{CoW Validity Conditions}
+
+Two intents $A$ and $B$ form a valid Simple CoW if and only if:
+
+\[
+A.\text{sellType} = B.\text{buyType} \quad \land \quad B.\text{sellType} = A.\text{buyType}
+\]
+\[
+A.\text{sellAmount} \geq B.\text{minAmountOut} \quad \land \quad B.\text{sellAmount} \geq A.\text{minAmountOut}
+\]
+
+In the case of a Partial CoW, only one directional condition needs to be satisfied. The side that is fully matched receives its complete fill through the peer-to-peer exchange; the remaining portion of the other side is routed through DeepBook as an AMM fallback.
+
+\subsection{On-Chain Price Floor as a Substitute for EBBO}
+
+CoW Protocol on Ethereum guarantees EBBO—Ethereum Best Bid and Offer, representing the best available price on on-chain AMMs—through Autopilot verification conducted off-chain \cite{documentationcowdaoa}. In the proposed design, an equivalent guarantee is achieved through \textit{on-chain price verification} performed within the settlement transaction itself. At the moment of execution, the contract reads \texttt{mid\_price} directly from DeepBook and enforces:
+
+\[
+\text{price\_floor}_i = \max\left(m_i, \text{mid\_price} \times 99\%\right)
+\]
+
+If \texttt{actual\_payout < price\_floor}, the contract aborts the transaction immediately. This requires no external oracle, no off-chain infrastructure, and no trusted third party. The 1\% buffer accommodates minor price movements between the commit and execute phases—a very short interval on Sui, but sufficient to introduce small deviations in the reference price.
+
+\nocite{chitraAnalysisIntentBasedMarkets2024}
+
