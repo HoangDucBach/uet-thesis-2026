@@ -17,10 +17,11 @@
 \begin{document}
 
 \input{frontmatter/coverpage}
-\pagenumbering{roman}
+\pagenumbering{gobble}
 
-
+\addcontentsline{toc}{chapter}{Acknowledgments}
 \input{frontmatter/thanks}
+\addcontentsline{toc}{chapter}{Declaration}
 \input{frontmatter/declaration}
 \addcontentsline{toc}{chapter}{Abstract}
 \input{frontmatter/abstract}
@@ -45,9 +46,10 @@
 \singlespacing
 
 \clearpage
-\bibliography{refs}
+\renewcommand{\bibname}{References}
 \addcontentsline{toc}{chapter}{References}
-\bibliographystyle{plainnat}
+\bibliographystyle{uet}
+\bibliography{refs}
 
 \begin{appendices}
     \input{chapters/appendixA}

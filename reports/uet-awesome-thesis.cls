@@ -108,8 +108,7 @@
 % line alignment
 \linespread{1.3}
 \addtolength{\footnotesep}{\footnotesep}
-\justifying
-%\raggedright
+\raggedright
 
 
 \titleformat{\chapter}[display]
@@ -268,12 +267,11 @@
 
 % the acknowledgments page
 \newcommand{\acknowledgments}[1]{
-    \chapter*{Acknowledgments}
-    \pagestyle{fancy}
+	\chapter*{Acknowledgments}
+	\thispagestyle{empty}
 	\noindent
-	\onehalfspacing
 	#1
-	\vspace*{\fill} 
+	\vspace*{\fill}
 	\newpage
 }
 
@@ -281,6 +279,14 @@
 \newcommand{\keywords}[1]{
 	\vspace{1cm}
 	\noindent\textbf{\textit{Keywords:}} \textit{#1}
+}
+
+% Frontmatter section command for consistent alignment and formatting
+\newcommand{\frontmattersection}[2]{
+	\chapter*{#1}
+	\thispagestyle{empty}
+	\noindent
+	#2
 }
 	
 % An environment for paragraph-style section
