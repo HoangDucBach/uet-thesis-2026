@@ -1,0 +1,57 @@
+%!TEX TS-program = xelatex
+\documentclass[en]{uet-awesome-thesis} % use [vi] for vietnamese
+
+\usepackage{blindtext}
+
+\title{Design and Implementation of an Intent-Based Meta DEX Aggregator with Coincidence-of-Wants Matching on Sui Blockchain}
+\author{Hoang Duc Bach}
+\major{Information Technology}
+\advisor{Dr. Nguyen Thi Hau}
+\university{University of Engineering and Technology}
+\universitycity{Hanoi}
+\degreeyear{2026}
+
+\input{frontmatter/glossaries}
+\makeglossaries
+
+\begin{document}
+
+\input{frontmatter/coverpage}
+\pagenumbering{roman}
+
+
+\input{frontmatter/thanks}
+\input{frontmatter/declaration}
+\addcontentsline{toc}{chapter}{Abstract}
+\input{frontmatter/abstract}
+
+\tableofcontents
+\addcontentsline{toc}{chapter}{List of Figures}
+\listoffigures
+\addcontentsline{toc}{chapter}{List of Tables}
+\listoftables
+
+\glsaddall
+\printglossary[type=\acronymtype,title=List of Acronyms, toctitle=List of Acronyms]
+\printglossary[type=notation,title=List of Notations, toctitle=List of Notations,nonumberlist]
+
+\newpage
+\pagenumbering{arabic}
+
+\input{chapters/chapter1}
+\input{chapters/chapter2}
+\input{chapters/chapter3}
+
+\singlespacing
+
+\clearpage
+\bibliography{refs}
+\addcontentsline{toc}{chapter}{References}
+\bibliographystyle{plainnat}
+
+\begin{appendices}
+    \input{chapters/appendixA}
+    \input{chapters/appendixB}
+\end{appendices}
+
+\end{document}

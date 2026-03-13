@@ -1,0 +1,213 @@
+ĐẠI HỌC QUỐC GIA HÀ NỘI CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM
+TRƯỜNG ĐẠI HỌC CÔNG NGHỆ Độc lập - Tự do - Hạnh phúc
+QUY ĐỊNH VỀ TRÌNH BÀY KHÓA LUẬN TỐT NGHIỆP
+(Dành cho sinh viên chương trình đào tạo chuẩn và chất lượng cao)
+1. Khóa luận tốt nghiệp (KLTN) phải được trình bày khúc chiết, ngắn gọn, sạch sẽ, không được tẩy
+xoá và được đánh máy, in laser một mặt trên giấy khổ A4 (210 x 297mm). Nếu trong KLTN có sử
+dụng tài liệu của người khác (như trích dẫn, bảng biểu, đồ thị, ...) nhất thiết phải ghi rõ tài liệu đã
+tham khảo.
+2. KLTN được trình bày theo thứ tự sau đây:
+- Trang bìa (xem Phụ lục 01).
+- Trang phụ bìa bằng Tiếng Việt (xem Phụ lục 02).
+- Trang phụ bìa bằng Tiếng Anh (xem phụ lục 05) (chỉ yêu cầu đối với sinh viên CLC).
+- Trang tóm tắt nội dung bằng Tiếng Việt(xem Phụ lục 03).
+- Trang tóm tắt nội dung bằng Tiếng Anh (xem phụ lục 06) (chỉ yêu cầu đối với sinh viên CLC).
+- Cách sắp xếp tài liệu tham khảo (xem Phụ lục 04).
+- Trang Lời cam đoan không sao chép các tài liệu, công trình nghiên cứu của người khác mà không
+chỉ rõ trong tài liệu tham khảo (khoảng 5-10 dòng) (sinh viên phải ký tên).
+- Mục lục.
+- Bảng các ký hiệu, chữ viết tắt (nếu có) được xếp theo thứ tự bảng chữ cái tiếng Việt. Không viết
+tắt những cụm từ dài hoặc những cụm từ ít xuất hiện trong KLTN.
+- Nội dung KLTN được trình bày theo thứ tự: Mở đầu (phải nêu lên được tính cần thiết của đề tài, ý
+nghĩa khoa học và thực tiễn của nó, đối tượng và phương pháp nghiên cứu, nội dung nghiên
+cứu), các chương và kết luận (phải nêu lên được những kết quả chính và đánh giá kết quả đạt
+được).
+- Phụ lục (nếu có).
+- Tài liệu tham khảo: Là những sách, ấn phẩm, tạp chí, ... mà bản thân sinh viên đã đọc và trích dẫn
+hoặc sử dụng ý tưởng vào KLTN (xem cách sắp xếp tài liệu tham khảo ở Phụ lục 05).
+- Số trang của KLTN được đánh liên tục bắt đầu từ phần Mở đầu cho đến hết phần Phụ lục. Đánh
+số trang vào giữa và ở phần dưới của tờ giấy.
+3. Số thứ tự của chương, mục và tiểu mục được đánh số bằng số Arập, không dùng số La mã. Các mục
+và tiểu mục được đánh số bằng các nhóm hai hoặc ba chữ số cách nhau một dấu chấm: số thứ nhất
+chỉ số chương; số thứ hai chỉ số mục; số thứ ba chỉ số tiểu mục.
+Ví dụ: Chương 1.
+1.1.
+1.1.1.
+1.1.2.
+...............
+1.2.
+1.2.1.
+1.2.2.
+...............
+4. Trong mỗi chương của KLTN thì các bảng biểu, hình vẽ, đồ thị được đánh số theo thứ tự từ đầu đến
+cuối đối với mỗi loại. Chú giải về bảng biểu được ghi ở trên đầu bảng, chú giải về đồ thị, hình vẽ
+và ảnh được ghi ở dưới đồ thị, hình vẽ và ảnh. Nếu trình bày bảng biểu, đồ thị, hình vẽ và ảnh theo
+chiều ngang khổ giấy thì phía trên đầu bảng biểu, đồ thị, hình vẽ và ảnh là lề trái của trang.
+Ví dụ: Chương 1.
+Hình 1.1.
+Hình 1.2.
+...............
+Chương 2.
+Hình 2.1.
+Hình 2.2.
+...............
+5. KLTN trung bình dày tối thiểu khoảng 3550 trang (không kể bảng biểu, đồ thị, hình vẽ và ảnh, tài
+liệu tham khảo và phụ lục). Dùng cỡ chữ 13pt của hệ soạn thảo Winword; phông chữ Unicode, dãn 
+dòng 1,3 lines, lề trên 2,5 cm, lề dưới 3 cm, lề trái 3 cm, lề phải 2 cm, hai đoạn văn bản cách nhau
+6pt và thụt dòng đầu của đoạn văn bản 1 cm.
+6. Do yêu cầu chuyên môn, có thể sử dụng các chương trình soạn thảo văn bản chuyên dụng khác như
+Latex, PC Text, ...
+7. KLTN phải được đóng bìa cứng và in chữ nhũ trên bìa 1 quyển (nộp cho Khoa để lưu trữ), đóng bìa
+mềm 3 quyển, trong đó 1 quyển nộp cho Khoa để Khoa chuyển cho Hội đồng chấm KLTN sau đó
+lưu tại Bộ môn, 1 quyển để sinh viên chuyển cho cán bộ hướng dẫn, 1 quyển để sinh viên chuyển
+cho cán bộ phản biện (đối với sinh viên theo học chương trình đào tạo chất lượng cao nộp thêm 1
+quyển bìa mềm cho cán bộ phản biện thứ hai).
+Phụ lục 01: Mẫu trang bìa KLTN
+ĐẠI HỌC QUỐC GIA HÀ NỘI
+TRƯỜNG ĐẠI HỌC CÔNG NGHỆ
+(chữ hoa, 12pt, đậm, căn giữa)
+<Họ và tên sinh viên>
+(chữ thường, 14pt, đậm, căn giữa)
+<TÊN ĐỀ TÀI KLTN>
+(chữ hoa, 18pt, đậm, căn giữa)
+(chữ hoa, 14pt, đậm, căn giữa)
+KHÓA LUẬN TỐT NGHIỆP ĐẠI HỌC HỆ CHÍNH QUY
+Ngành: (chữ thường, 14pt, đậm)
+(Chú ý: Ghi đúng tên ngành đào tạo)
+HÀ NỘI - 20< hai số cuối của năm bảo vệ KLTN>
+(chữ hoa, 12pt, đậm, căn giữa)
+Phụ lục 02: Mẫu trang phụ bìa KLTN tiếng Việt
+ĐẠI HỌC QUỐC GIA HÀ NỘI
+TRƯỜNG ĐẠI HỌC CÔNG NGHỆ
+(chữ hoa, 12pt, đậm, căn giữa)
+<Họ và tên sinh viên>
+(chữ thường, 14pt, đậm, căn giữa)
+<TÊN ĐỀ TÀI KLTN>
+(chữ hoa, 18pt, đậm, căn giữa)
+(chữ hoa, 14pt, đậm, căn giữa)
+KHÓA LUẬN TỐT NGHIỆP ĐẠI HỌC HỆ CHÍNH QUY
+Ngành: (chữ thường, 14pt, đậm)
+(Chú ý: Ghi đúng tên ngành được đào tạo)
+Cán bộ hướng dẫn: (chữ thường, 14pt, đậm)
+(ký tên)
+Cán bộ đồng hướng dẫn: (nếu có - chữ thường, 14pt, đậm)
+(ký tên)
+HÀ NỘI - 20<hai số cuối của năm bảo vệ KLTN>
+(chữ hoa, 12pt, đậm, căn giữa)
+Phụ lục 03: Mẫu trang tóm tắt nội dung KLTN
+TÓM TẮT
+(chữ hoa, 13pt, đậm, căn giữa)
+1. Ghi chú về các qui định trong cách trình bày:
+- Font chữ trình bày: Times New Roman
+- “Tóm tắt”: In đậm, kích thước chữ: 12pt. Nội dung phần tóm tắt khóa luận tốt nghiệp
+được trình bày trong khoảng 360 từ với kích thước chữ 12pt, chữ thường
+- “Từ khóa” : In nghiêng và đậm, kích thước chữ: 12pt, số lượng từ khóa: đưa ra nhiều
+nhất 04 cụm từ khóa biểu đạt được nội dung chính của đề tài khóa luận
+Từ khóa:
+2. Ví dụ về cách trình bày tóm tắt nội dung Khóa luận tốt nghiệp:
+TÓM TẮT
+Tóm tắt: Hiện nay, với sự phát triển nhanh chóng của các dịch vụ IP và sự bùng nổ của
+Internet đã dẫn đến một loạt các vấn đề được đặt ra như: tốc độ truyền, quản lý chất lượng
+dịch vụ, điều phối dung lượng…Gần đây, công nghệ chuyển mạch nhãn đa giao thức MPLS
+được đề xuất, MPLS đã kết hợp được khả năng định tuyến tốt ở lớp 3 và chuyển mạch ở lớp
+2, nó mở ra một viễn cảnh cho rất nhiều ứng dụng quan trọng. Mạng riêng ảo VPN là một
+trong những ứng dụng nổi bật nhất của công nghệ MPLS, MPLS VPN đã khắc phục được hầu
+hết những nhược điểm tồn tại trước đó trong công nghệ VPN truyền thống. Do vậy, trong đề
+tài khóa luận này em muốn giới thiệu công nghệ MPLS và dịch vụ MPLS VPN. Nội dung của
+Đồ án sẽ tập trung trình bày những đặc điểm cơ bản của kiến trúc MPLS, tính ưu việt trong
+ứng dụng MPLS VPN, và các bước tiến hành cấu hình trên Router của hãng Cisco.
+Từ khóa: MPLS, Chuyển mạch nhãn. 
+Phụ lục 04: Cách sắp xếp tài liệu tham khảo
+1. Tài liệu tham khảo bao gồm những sách, ấn phẩm, tạp chí, ... đã đọc và được trích dẫn hoặc
+được sử dụng ý tưởng vào KLTN.
+2. Tài liệu tham khảo được xếp riêng theo từng ngôn ngữ (Việt, Anh, Pháp, Đức, Nga, Trung,
+Nhật, ...). Các tài liệu bằng tiếng nước ngoài phải giữ nguyên văn, không phiên âm, không
+dịch, kể cả tài liệu bằng tiếng Trung, tiếng Nhật ... (đối với những tài liệu bằng ngôn ngữ
+còn ít người biết có thể thêm phần dịch tiếng Việt đi kèm theo mỗi tài liệu).
+3. Các tài liệu tham khảo khi liệt kê vào danh mục phải đầy đủ các thông tin cần thiết và theo
+trình tự sau: Số thứ tự (đặt trong cặp dấu ngoặc vuông), Họ tên tác giả, Tên tài liệu (bài
+báo, sách, ...), Nguồn (tên tạp chí, tập, số, năm hoặc tên nhà xuất bản), Trang tham khảo.
+4. Tài liệu tham khảo xếp theo thứ tự ABC họ tên tác giả theo thông lệ từng nước:
+- Tác giả là người nước ngoài: xếp thứ tự ABC theo họ.
+- Tác giả là người Việt Nam: xếp theo thứ tự ABC theo tên nhưng vẫn giữu nguyên thứ tự
+thông thường của tên người Việt, không đảo tên lên trước họ.
+- Tài liệu không có tên tác giả thì xếp theo thứ tự ABC từ đầu của tên cơ quan ban hành
+(báo cáo hay ấn phẩm), ví dụ: Tổng cục Thống kê xếp vào vần T, Bộ Giáo dục và Đào
+tạo xếp vào vần B, v.v...
+5. Tài liệu tham khảo là sách, luận án phải ghi đầy đủ các thông tin sau:
+- Tên các tác giả hoặc cơ quan ban hành (không có dấu ngăn cách)
+- Tên sách, luận án hoặc báo cáo được in nghiêng, có dấu phẩy cuối tên
+- Nhà xuất bản (dấu phẩy cuối tên nhà xuất bản)
+- Nơi xuất bản (dấu chấm kết thúc tài liệu tham khảo)
+- Năm xuất bản
+- Các số trang (Bắt đầu bằng chữ tr. nếu là tài liệu tiếng Việt, chữ pp. nếu là tiếng Anh,
+gạch ngang giữa hai chữ số nếu là các trang liên tiếp, đánh dấu phẩy giữa danh sách các
+trang không liên tiếp, dấu chấm kết thúc).
+6. Tài liệu tham khảo là bài báo trong tạp chí, trong một kỷ yếu hội nghị, hội thảo khoa học ...
+cần ghi đầy đủ các thông tin sau:
+- Tên tác giả (nếu là danh sách tác giả thì các tên cách nhau bởi dấu phẩy)
+- Tên bài báo (đặt trong ngoặc kép không in nghiêng, dấu phẩy cuối tên bài báo);
+- Tên tạp chí hoặc tên kỷ yếu (in nghiêng, dấu phẩy cuối tên)
+- Số tập (volume – nếu có)
+- Năm công bố
+- Các số trang (Bắt đầu bằng chữ tr. nếu là tài liệu tiếng Việt, chữ pp. nếu là tiếng Anh,
+gạch ngang giữa hai chữ số nếu là các trang liên tiếp, đánh dấu phẩy giữa danh sách các
+trang không liên tiếp, dấu chấm kết thúc).
+7. Tài liệu tham khảo trích dẫn trong KLTN được ghi theo số thứ tự của tài liệu tham khảo ở
+Danh mục tài liệu tham khảo này của KLTN và số thứ tự đó được đặt trong cặp dấu ngoặc
+vuông.
+Ví dụ về cách trình bày tài liệu tham khảo:
+TÀI LIỆU THAM KHẢO
+Tiếng Việt
+[1] Phan Đình Diệu, Lý thuyết về độ phức tạp tính toán, Nhà xuất bản Đại học Quốc gia Hà
+Nội, 1999, tr.15-25.
+[2] Nguyễn Việt Cường, Nguyễn Thị Thùy Linh, Phan Xuân Hiếu, Hà Quang Thụy, “Bài
+toán lọc và phân lớp nội dung Web tiếng Việt với hướng tiếp cận Entropy cực đại”, Kỷ 
+yếu Hội thảo quốc gia lần thứ VIII Một số vấn đề chọn lọc của Công nghệ thông tin và
+Truyền thông, 2005, tr. 1-2.
+[3] Bùi Anh Tuấn, Nghiên cứu ứng dụng công nghệ chuyển mạch mềm (Soft Switch) trên
+mạng NGN Việt Nam, Luận văn Thạc sĩ, Trường Đại học Công nghệ, Đại học Quốc gia
+Hà Nội, 2006, tr.32-37.
+Tiếng Anh
+[4] M.W. Allister and S.A. Long, ”Resonant hemispherical dielectric antenna”, Electronics
+Letters, Vol. 20, 2008, pp. 657-659.
+[5] C.L. Dym and R.E. Levit, Knowledge-based Systems in Engineering, McGraw-Hill,
+1991, pp. 51, 76, 102-108.
+[6] The IEEE, IEEE Standard Test Procedures for Antennas, ANSI/IEEE Std 149-1979.
+Phụ lục 05: Mẫu trang phụ bìa KLTN bằng Tiếng Anh (chỉ yêu cầu đối với sinh viên
+CLC)
+VIETNAM NATIONAL UNIVERSITY, HANOI
+UNIVERSITY OF ENGINEERING AND TECHNOLOGY
+(Upper case, bold, 12pt, centered)
+<Author’s name>
+(Lower case, bold, 14pt, centered)
+<THESIS TITLE>
+(Upper case, bold, 18pt, centered)
+Major: (Lower case, bold, 14pt)
+Supervisor: (Lower case, bold, 14pt)
+Co-Supervisor: (Lower case, bold, 14pt)
+HA NOI - 20<the last two numbers of the defense year >
+(Upper case, bold, 12pt, centered)
+Phụ lục 06: Mẫu trang tóm tắt nội dung KLTN bằng Tiếng Anh (chỉ yêu cầu đối với
+sinh viên CLC)
+ABSTRACT
+
+Abstract: About 360 words in Times New Roman 12pt
+Keywords: Introduce maximum 4 keywords in Italic 12pt defining the topics of your abstract
+Abstract: “TruongNha” is school management software service which is the co-investment
+of Viettel group and Vietnam National University, Hanoi. It allows the teacher to enter marks,
+attendances as well as the works related to class. Parents of students and students can use the
+web to access the information. Teachers can send SMS messages to parents to notify the
+performance of their students at school. However, It is not convenient to parents go website to
+see the information about their children. They do not know when their children have new
+marks or new attendances to go the website to see. Sending SMS has paid a fee and parents
+can not be able to view the overall status of their child's learning. In addition, the phones
+using the Android operating system are popular in Vietnam. Therefore, the building of the
+application running on the phone will help teachers to enter the marks and attendances
+conveniently. Parents can get information of their children on the phone easily. There are two
+parts in my thesis in order to build this application. In the first part, I build web service to
+exchange data with Android client. In the second part, I have to build an Android client for
+teachers, students and parents of students. Students need to know their marks or attendances
+frequently; teachers need to enter marks or attendance for the classes they are in charge. I
+focus to analysis, design and other necessary steps to complete these requirements.
+Keywords: TruongNha, school management software service, Android client.

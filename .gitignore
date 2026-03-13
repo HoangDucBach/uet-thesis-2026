@@ -25,3 +25,28 @@ target/
 **/target/
 **/*.rs.bk
 Cargo.lock
+
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.glo
+*.idx
+*.ilg
+*.ind
+*.ist
+*.lof
+*.log
+*.lot
+*.ntn
+*.out
+*.pdfsync
+*.synctex.gz
+*.toc
+*.nlo
+
+# Keep source files and final PDF
+!*.tex
+!reports/main.pdf
