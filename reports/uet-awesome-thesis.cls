@@ -49,7 +49,6 @@
 \definecolor{Crimson}{rgb}{0.6471, 0.1098, 0.1882}
 
 \hypersetup{
-	linktocpage,
     colorlinks,
     citecolor=black,
     filecolor=black,
@@ -63,7 +62,7 @@
 \setcounter{tocdepth}{3}
 \setcounter{secnumdepth}{3}
 
-\renewcommand{\cftchapfont}{\normalsize \scshape}
+\renewcommand{\cftchapfont}{\normalsize \bfseries}
 \setlength{\parindent}{1cm}
 \setlength{\parskip}{6pt}
 
@@ -114,8 +113,8 @@
 
 
 \titleformat{\chapter}[display]
-  {\Huge}
-  {\chaptertitlename\ \thechapter}{20pt}{\Huge\sloppy}
+  {\Huge\bfseries}
+  {\chaptertitlename\ \thechapter}{20pt}{\Huge\bfseries\sloppy}
 
 \titleformat{\section}
   {\Large}
