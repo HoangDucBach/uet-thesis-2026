@@ -55,13 +55,27 @@ public struct BatchRegistry has key {
 ///
 /// * `batch_id`: Batch this ticket is for.
 /// * `committed_score`: Winner's committed surplus estimate (in USDC-scaled units).
-/// * `actual_surplus`: Accumulated surplus per process_intent() call.
-/// * `processed_count`: Number of intents processed so far.
+/// * `actual_surplus`: Accumulated surplus per settle_intent_*() call.
+/// * `intent_ids`: Remaining intents yet to be settled.
 public struct SettlementTicket {
     batch_id: u64,
     intent_ids: VecSet<ID>,
     committed_score: u64,
     actual_surplus: u64,
+}
+
+/// Hot Potato — no abilities. Created by take_intent_*(), must be consumed by settle_intent_*().
+/// Carries the data needed to verify and settle a taken intent without pre-funding.
+///
+/// * `intent_id`: The intent this receipt is for.
+/// * `owner`: Intent owner who receives the payout.
+/// * `sell_amount`: Amount of SellCoin taken from the intent.
+/// * `min_amount_out`: Minimum acceptable payout (proportional for partial fills).
+public struct IntentReceipt<phantom Sell, phantom Buy> {
+    intent_id: ID,
+    owner: address,
+    sell_amount: u64,
+    min_amount_out: u64,
 }
 
 /// Commitment entry for a solver in commit phase.
@@ -340,176 +354,184 @@ public fun open_settlement(
     }
 }
 
-/// Process intent selling Base and buying Quote.
+/// Take all sell assets from intent selling Base (full fill).
+/// Returns sell coins for solver to use + IntentReceipt hot potato.
+/// intent_id is NOT yet removed from ticket — must call settle_intent_base_to_quote.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: Intent<Base, Quote> — selling Base, buying Quote.
-/// * `payout`: Coin<Quote> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock for DeepBook mid_price calculation.
+/// * `intent`: Intent<Base, Quote> — consumed (deleted on-chain).
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `Coin<Base>` — base coin released from the intent for solver.
-public fun process_intent_base_to_quote<Base, Quote>(
+/// Returns: `(Coin<Base>, IntentReceipt<Base, Quote>)`
+public fun take_intent_base_to_quote<Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: Intent<Base, Quote>,
-    payout: Coin<Quote>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
     ctx: &mut TxContext,
-): Coin<Base> {
+): (Coin<Base>, IntentReceipt<Base, Quote>) {
     let intent_id_val = intent_book::intent_id(&intent);
-    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
+    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
 
     let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
     let sell_amount = sell_balance.value();
 
-    let price_floor = calculate_price_floor(
-        pool,
-        true,
+    let receipt = IntentReceipt<Base, Quote> {
+        intent_id: intent_id_val,
+        owner,
         sell_amount,
         min_amount_out,
-        clock,
-    );
+    };
 
-    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
-    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-
-    transfer::public_transfer(payout, owner);
-
-    sell_balance.into_coin(ctx)
+    (sell_balance.into_coin(ctx), receipt)
 }
 
-/// Process intent selling Quote and buying Base.
+/// Take all sell assets from intent selling Quote (full fill).
+/// Returns sell coins for solver to use + IntentReceipt hot potato.
+/// intent_id is NOT yet removed from ticket — must call settle_intent_quote_to_base.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: Intent<Quote, Base> — selling Quote, buying Base.
-/// * `payout`: Coin<Base> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock for DeepBook mid_price calculation.
+/// * `intent`: Intent<Quote, Base> — consumed (deleted on-chain).
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `Coin<Quote>` — quote coin released from the intent for solver.
-public fun process_intent_quote_to_base<Base, Quote>(
+/// Returns: `(Coin<Quote>, IntentReceipt<Quote, Base>)`
+public fun take_intent_quote_to_base<Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: Intent<Quote, Base>,
-    payout: Coin<Base>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
     ctx: &mut TxContext,
-): Coin<Quote> {
+): (Coin<Quote>, IntentReceipt<Quote, Base>) {
     let intent_id_val = intent_book::intent_id(&intent);
-    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
+    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
 
     let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
     let sell_amount = sell_balance.value();
 
-    let price_floor = calculate_price_floor(
-        pool,
-        false,
+    let receipt = IntentReceipt<Quote, Base> {
+        intent_id: intent_id_val,
+        owner,
         sell_amount,
         min_amount_out,
-        clock,
-    );
+    };
 
-    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
-    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-
-    transfer::public_transfer(payout, owner);
-
-    sell_balance.into_coin(ctx)
+    (sell_balance.into_coin(ctx), receipt)
 }
 
-/// Process partial fill for intent selling Base and buying Quote.
-/// Intent is mutated but NOT deleted — stay on-chain.
+/// Take partial sell assets from intent selling Base.
+/// Intent stays alive on-chain for remaining balance.
+/// intent_id is NOT yet removed from ticket — must call settle_intent_base_to_quote.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: &mut Intent<Base, Quote> — selling Base, buying Quote.
-/// * `fill_amount`: Base units to fill this round.
-/// * `payout`: Coin<Quote> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock.
+/// * `intent`: &mut Intent<Base, Quote> — mutated, stays on-chain.
+/// * `fill_amount`: Base units to take this round.
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `Coin<Base>` — partial base coin released from the intent for solver.
-public fun process_intent_partial_base_to_quote<Base, Quote>(
+/// Returns: `(Coin<Base>, IntentReceipt<Base, Quote>)`
+public fun take_intent_partial_base_to_quote<Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: &mut Intent<Base, Quote>,
     fill_amount: u64,
-    payout: Coin<Quote>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
     ctx: &mut TxContext,
-): Coin<Base> {
+): (Coin<Base>, IntentReceipt<Base, Quote>) {
     let intent_id_val = intent_book::intent_id(intent);
     assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
 
-    let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
+    let (owner, partial_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
         fill_amount,
     );
 
-    let price_floor = calculate_price_floor(
-        pool,
-        true,
-        fill_amount,
-        proportional_min_out,
-        clock,
-    );
+    let receipt = IntentReceipt<Base, Quote> {
+        intent_id: intent_id_val,
+        owner,
+        sell_amount: fill_amount,
+        min_amount_out: proportional_min_out,
+    };
 
-    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
-    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-
-    transfer::public_transfer(payout, owner);
-
-    partial_sell_balance.into_coin(ctx)
+    (partial_balance.into_coin(ctx), receipt)
 }
 
-/// Process partial fill for intent selling Quote and buying Base.
-/// Intent is mutated but NOT deleted — stay on-chain.
+/// Take partial sell assets from intent selling Quote.
+/// Intent stays alive on-chain for remaining balance.
+/// intent_id is NOT yet removed from ticket — must call settle_intent_quote_to_base.
 ///
 /// * `ticket`: SettlementTicket.
-/// * `intent`: &mut Intent<Quote, Base> — selling Quote, buying Base.
-/// * `fill_amount`: Quote units to fill this round.
-/// * `payout`: Coin<Base> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock.
+/// * `intent`: &mut Intent<Quote, Base> — mutated, stays on-chain.
+/// * `fill_amount`: Quote units to take this round.
 /// * `ctx`: Transaction context.
 ///
-/// Returns: `Coin<Quote>` — partial quote coin released from the intent for solver.
-public fun process_intent_partial_quote_to_base<Base, Quote>(
+/// Returns: `(Coin<Quote>, IntentReceipt<Quote, Base>)`
+public fun take_intent_partial_quote_to_base<Base, Quote>(
     ticket: &mut SettlementTicket,
     intent: &mut Intent<Quote, Base>,
     fill_amount: u64,
-    payout: Coin<Base>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
     ctx: &mut TxContext,
-): Coin<Quote> {
+): (Coin<Quote>, IntentReceipt<Quote, Base>) {
     let intent_id_val = intent_book::intent_id(intent);
     assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-    vec_set::remove(&mut ticket.intent_ids, &intent_id_val);
 
-    let (owner, partial_sell_balance, proportional_min_out) = intent_book::consume_intent_partial(
+    let (owner, partial_balance, proportional_min_out) = intent_book::consume_intent_partial(
         intent,
         fill_amount,
     );
 
-    let price_floor = calculate_price_floor(
-        pool,
-        false,
-        fill_amount,
-        proportional_min_out,
-        clock,
-    );
+    let receipt = IntentReceipt<Quote, Base> {
+        intent_id: intent_id_val,
+        owner,
+        sell_amount: fill_amount,
+        min_amount_out: proportional_min_out,
+    };
 
+    (partial_balance.into_coin(ctx), receipt)
+}
+
+/// Settle an intent that sold Base — consume IntentReceipt, verify payout, pay user.
+/// Works for both full fills (from take_intent_base_to_quote) and
+/// partial fills (from take_intent_partial_base_to_quote).
+///
+/// * `ticket`: SettlementTicket.
+/// * `receipt`: IntentReceipt<Base, Quote> — hot potato, consumed here.
+/// * `payout`: Coin<Quote> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
+/// * `clock`: Sui clock.
+public fun settle_intent_base_to_quote<Base, Quote>(
+    ticket: &mut SettlementTicket,
+    receipt: IntentReceipt<Base, Quote>,
+    payout: Coin<Quote>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+) {
+    let IntentReceipt<Base, Quote> { intent_id, owner, sell_amount, min_amount_out } = receipt;
+    vec_set::remove(&mut ticket.intent_ids, &intent_id);
+
+    let price_floor = calculate_price_floor(pool, true, sell_amount, min_amount_out, clock);
     assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+
     ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-
     transfer::public_transfer(payout, owner);
+}
 
-    partial_sell_balance.into_coin(ctx)
+/// Settle an intent that sold Quote — consume IntentReceipt, verify payout, pay user.
+/// Works for both full fills (from take_intent_quote_to_base) and
+/// partial fills (from take_intent_partial_quote_to_base).
+///
+/// * `ticket`: SettlementTicket.
+/// * `receipt`: IntentReceipt<Quote, Base> — hot potato, consumed here.
+/// * `payout`: Coin<Base> — payout for intent owner.
+/// * `pool`: DeepbookPool<Base, Quote>.
+/// * `clock`: Sui clock.
+public fun settle_intent_quote_to_base<Base, Quote>(
+    ticket: &mut SettlementTicket,
+    receipt: IntentReceipt<Quote, Base>,
+    payout: Coin<Base>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+) {
+    let IntentReceipt<Quote, Base> { intent_id, owner, sell_amount, min_amount_out } = receipt;
+    vec_set::remove(&mut ticket.intent_ids, &intent_id);
+
+    let price_floor = calculate_price_floor(pool, false, sell_amount, min_amount_out, clock);
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+
+    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
+    transfer::public_transfer(payout, owner);
 }
 
 /// Close settlement — consume Hot Potato, verify score, return winner bond.
