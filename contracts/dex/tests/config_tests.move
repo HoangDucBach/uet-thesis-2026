@@ -16,13 +16,13 @@ fun test_init_config_defaults() {
     let mut ctx = tx_context::dummy();
     let (config, cap) = config::create_for_testing(&mut ctx);
 
-    assert!(config::min_bond(&config) == config::default_min_bond());
-    assert!(config::commit_duration_ms(&config) == config::default_commit_duration_ms());
-    assert!(config::grace_period_ms(&config) == config::default_grace_period_ms());
-    assert!(config::protocol_fee_bps(&config) == config::default_protocol_fee_bps());
-    assert!(config::version(&config) == 1);
+    assert!(config.min_bond() == config::default_min_bond());
+    assert!(config.commit_duration_ms() == config::default_commit_duration_ms());
+    assert!(config.grace_period_ms() == config::default_grace_period_ms());
+    assert!(config.protocol_fee_bps() == config::default_protocol_fee_bps());
+    assert!(config.version() == 1);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 // === Tests: set_min_bond ===
@@ -32,10 +32,10 @@ fun test_set_min_bond() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_min_bond(&mut config, 2_000_000_000, &cap);
-    assert!(config::min_bond(&config) == 2_000_000_000);
+    config.set_min_bond(2_000_000_000, &cap);
+    assert!(config.min_bond() == 2_000_000_000);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -44,9 +44,9 @@ fun test_set_min_bond_zero_aborts() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_min_bond(&mut config, 0, &cap);
+    config.set_min_bond(0, &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 // === Tests: set_commit_duration ===
@@ -56,10 +56,10 @@ fun test_set_commit_duration() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_commit_duration(&mut config, 3000, &cap);
-    assert!(config::commit_duration_ms(&config) == 3000);
+    config.set_commit_duration(3000, &cap);
+    assert!(config.commit_duration_ms() == 3000);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -68,9 +68,9 @@ fun test_set_commit_duration_zero_aborts() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_commit_duration(&mut config, 0, &cap);
+    config.set_commit_duration(0, &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 // === Tests: set_grace_period ===
@@ -81,9 +81,9 @@ fun test_set_grace_period_zero_aborts() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_grace_period(&mut config, 0, &cap);
+    config.set_grace_period(0, &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 // === Tests: set_protocol_fee ===
@@ -93,10 +93,10 @@ fun test_set_protocol_fee_zero_allowed() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_protocol_fee(&mut config, 0, &cap);
-    assert!(config::protocol_fee_bps(&config) == 0);
+    config.set_protocol_fee(0, &cap);
+    assert!(config.protocol_fee_bps() == 0);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -104,10 +104,10 @@ fun test_set_protocol_fee_max_boundary() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_protocol_fee(&mut config, config::max_protocol_fee_bps(), &cap);
-    assert!(config::protocol_fee_bps(&config) == 10_000);
+    config.set_protocol_fee(config::max_protocol_fee_bps(), &cap);
+    assert!(config.protocol_fee_bps() == 10_000);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -116,9 +116,9 @@ fun test_set_protocol_fee_exceeds_max_aborts() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::set_protocol_fee(&mut config, 10_001, &cap);
+    config.set_protocol_fee(10_001, &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 // === Tests: ACL grant/revoke ===
@@ -129,13 +129,13 @@ fun test_grant_role_and_check() {
     let (mut config, cap) = config::create_for_testing(&mut ctx);
     let addr = @0xCAFE;
 
-    assert!(!config::has_role(&config, addr, config::role_config_admin()));
+    assert!(!config.has_role(addr, config::role_config_admin()));
 
-    config::grant_role(&mut config, addr, config::role_config_admin(), &cap);
+    config.grant_role(addr, config::role_config_admin(), &cap);
 
-    assert!(config::has_role(&config, addr, config::role_config_admin()));
+    assert!(config.has_role(addr, config::role_config_admin()));
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -144,12 +144,12 @@ fun test_grant_role_idempotent() {
     let (mut config, cap) = config::create_for_testing(&mut ctx);
     let addr = @0xCAFE;
 
-    config::grant_role(&mut config, addr, config::role_config_admin(), &cap);
-    config::grant_role(&mut config, addr, config::role_config_admin(), &cap);
+    config.grant_role(addr, config::role_config_admin(), &cap);
+    config.grant_role(addr, config::role_config_admin(), &cap);
 
-    assert!(config::has_role(&config, addr, config::role_config_admin()));
+    assert!(config.has_role(addr, config::role_config_admin()));
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -158,13 +158,13 @@ fun test_revoke_role() {
     let (mut config, cap) = config::create_for_testing(&mut ctx);
     let addr = @0xCAFE;
 
-    config::grant_role(&mut config, addr, config::role_config_admin(), &cap);
-    assert!(config::has_role(&config, addr, config::role_config_admin()));
+    config.grant_role(addr, config::role_config_admin(), &cap);
+    assert!(config.has_role(addr, config::role_config_admin()));
 
-    config::revoke_role(&mut config, addr, config::role_config_admin(), &cap);
-    assert!(!config::has_role(&config, addr, config::role_config_admin()));
+    config.revoke_role(addr, config::role_config_admin(), &cap);
+    assert!(!config.has_role(addr, config::role_config_admin()));
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -172,9 +172,9 @@ fun test_revoke_role_not_in_acl_is_noop() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::revoke_role(&mut config, @0xDEAD, config::role_config_admin(), &cap);
+    config.revoke_role(@0xDEAD, config::role_config_admin(), &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -183,9 +183,9 @@ fun test_assert_config_admin_aborts_without_role() {
     let mut ctx = tx_context::dummy();
     let (config, cap) = config::create_for_testing(&mut ctx);
 
-    config::assert_config_admin(&config, @0xDEAD);
+    config.assert_config_admin(@0xDEAD);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
 
 #[test]
@@ -194,7 +194,7 @@ fun test_grant_invalid_role_aborts() {
     let mut ctx = tx_context::dummy();
     let (mut config, cap) = config::create_for_testing(&mut ctx);
 
-    config::grant_role(&mut config, @0xCAFE, 99, &cap);
+    config.grant_role(@0xCAFE, 99, &cap);
 
-    config::destroy_for_testing(config, cap);
+    config.destroy_for_testing(cap);
 }
