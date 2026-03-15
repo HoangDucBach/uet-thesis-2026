@@ -6,7 +6,7 @@ set -e
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-PACKAGE_ID="0xa16493b1e55665a3ecfe3f3cce935a8bc56313691457d8fa8aaaabe02be19e19"
+PACKAGE_ID="0x4c330ef3136a1bcf47259c74d2cfdea33e5cbb485c74537beab2903313d06883"
 CLOCK="0x6"
 GAS_BUDGET="20000000"
 
@@ -22,9 +22,6 @@ echo ">>> Active address:"
 ACTIVE_ADDR=$(sui client active-address)
 echo "$ACTIVE_ADDR"
 
-# ─── Query recent Intent objects ──────────────────────────────────────────────
-
-# ─── Parse command-line arguments ─────────────────────────────────────────
 
 if [ $# -lt 1 ]; then
   echo "ERROR: No intent IDs provided"
@@ -37,8 +34,6 @@ echo ">>> Intent IDs to cancel:"
 for id in "$@"; do
   echo "  - $id"
 done
-
-# ─── Cancel each intent ───────────────────────────────────────────────────────
 
 COUNT=0
 for INTENT_ID in "$@"; do

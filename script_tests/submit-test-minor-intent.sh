@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# submit-test-intents.sh
-# Test CoW matching: 2 intents ngược chiều nhau (Scale-up: 0.5 SUI)
-#   Intent A: sell 0.5 SUI    → want ≥ 15 DEEP
-#   Intent B: sell 17 DEEP    → want ≥ 0.45 SUI
+# submit-test-minor-intents.sh
 
 set -e
 
@@ -32,12 +29,12 @@ fi
 
 # ─── Intent A: sell 0.5 SUI → want DEEP ───────────────────────────────────────
 echo ""
-echo ">>> Submitting Intent A: sell 0.5 SUI → want ≥ 15,000,000 units (15 DEEP)"
+echo ">>> Submitting Intent A: sell 0.000001 SUI (for minor intent)"
 echo "Using Gas Coin: $BIGGEST_SUI"
 
 sui client ptb \
   --gas-coin "@$BIGGEST_SUI" \
-  --split-coins gas "[500000000]" \
+  --split-coins gas "[100]" \
   --assign sui_sell \
   --move-call "${PACKAGE_ID}::intent_book::create_intent" \
     "<${SUI_TYPE}, ${DEEP_TYPE}>" \
@@ -49,38 +46,6 @@ sui client ptb \
   --gas-budget $GAS_BUDGET
 
 echo "Intent A submitted OK"
-
-echo ""
-echo ">>> Refreshing DEEP coin lookup..."
-DEEP_COIN=$(sui client objects --json 2>/dev/null \
-  | jq -r --arg t "0x2::coin::Coin<$DEEP_TYPE>" \
-    '[.[] | select(.data.type == $t)] | sort_by(.data.content.fields.balance | tonumber) | reverse | .[0].data.objectId')
-
-if [ -z "$DEEP_COIN" ] || [ "$DEEP_COIN" = "null" ]; then
-  echo "ERROR: Không có DEEP coin! Hãy đảm bảo ví có ít nhất 17 DEEP."
-  exit 1
-fi
-echo "Using DEEP coin object: $DEEP_COIN"
-
-echo ""
-echo ">>> Submitting Intent B: sell 17 DEEP → want ≥ 450_000_000 MIST (0.45 SUI)"
-
-BIGGEST_SUI_B=$(sui client gas --json | jq -r 'sort_by(.mistBalance | tonumber) | reverse | .[0].gasCoinId')
-
-sui client ptb \
-  --gas-coin "@$BIGGEST_SUI_B" \
-  --split-coins "@$DEEP_COIN" "[17000000]" \
-  --assign deep_sell \
-  --move-call "${PACKAGE_ID}::intent_book::create_intent" \
-    "<${DEEP_TYPE}, ${SUI_TYPE}>" \
-    deep_sell.0 \
-    450000000 \
-    false \
-    $DEADLINE \
-    @$CLOCK \
-  --gas-budget $GAS_BUDGET
-
-echo "Intent B submitted OK"
 
 echo ""
 echo "=== Done! ==="
