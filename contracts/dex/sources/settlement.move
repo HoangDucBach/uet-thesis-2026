@@ -21,9 +21,10 @@ const EClearingPriceMismatch: u64 = 2;
 const ENotWinner: u64 = 3;
 const EScoreMismatch: u64 = 4;
 const EInvalidDeadline: u64 = 5;
-const EWrongBatch: u64 = 6;
-const EDuplicateCommit: u64 = 7;
-const EIncompleteBatch: u64 = 8;
+const ENotInBatch: u64 = 6;
+const ESolverNotRegistered: u64 = 10;
+const ESolverAlreadyRegistered: u64 = 11;
+const ESettleConditionsNotMet: u64 = 12;
 
 // === Constants ===
 
@@ -33,6 +34,7 @@ const SLIPPAGE_TOLERANCE_DENOM: u128 = 100;
 // === Enums ===
 
 public enum AuctionPhase has copy, drop, store {
+    Idle,
     Commit,
     Execute,
     Done,
@@ -42,117 +44,479 @@ public enum AuctionPhase has copy, drop, store {
 
 // === Structs ===
 
-/// Global batch counter state.
-/// * `id`: Unique object ID.
-/// * `next_batch_id`: Counter for next batch (starts at 0).
-public struct BatchRegistry has key {
+/// Global solver registry (singleton, Shared Object).
+public struct SolverRegistry has key {
     id: UID,
-    next_batch_id: u64,
+    solvers: VecSet<address>,
+    bonds: Table<address, Balance<SUI>>,
 }
 
-/// Hot Potato — no abilities. Forces completion of settlement.
-/// Must be consumed by close_settlement() or PTB validation fails.
+/// Global auction state machine.
 ///
-/// * `batch_id`: Batch this ticket is for.
-/// * `committed_score`: Winner's committed surplus estimate (in USDC-scaled units).
-/// * `actual_surplus`: Accumulated surplus per settle_intent_*() call.
-/// * `intent_ids`: Remaining intents yet to be settled.
-public struct SettlementTicket {
-    batch_id: u64,
+/// * `current_epoch_id`: The epoch currently being settled.
+/// * `phase`: Current auction phase.
+/// * `commit_end_ms`: Deadline for commit phase.
+/// * `execute_deadline_ms`: Deadline for winner to execute settlement.
+/// * `committed`: Set of solver addresses that have committed this epoch.
+/// * `winner`, `winner_score`, `runner_up`, `runner_up_score`: Leaderboard.
+/// * `current_epoch_surplus`: Accumulated surplus from settle_intent_* calls.
+/// * `intent_ids`: All intent IDs registered in the current batch.
+public struct AuctionState has key {
+    id: UID,
+    current_epoch_id: u64,
+    phase: AuctionPhase,
+    commit_end_ms: u64,
+    execute_deadline_ms: u64,
+    committed: VecSet<address>,
+    winner: Option<address>,
+    winner_score: u64,
+    runner_up: Option<address>,
+    runner_up_score: u64,
+    current_epoch_surplus: u64,
     intent_ids: VecSet<ID>,
-    committed_score: u64,
-    actual_surplus: u64,
 }
 
-/// Hot Potato — no abilities. Created by take_intent_*(), must be consumed by settle_intent_*().
-/// Carries the data needed to verify and settle a taken intent without pre-funding.
-///
-/// * `intent_id`: The intent this receipt is for.
-/// * `owner`: Intent owner who receives the payout.
-/// * `sell_amount`: Amount of SellCoin taken from the intent.
-/// * `min_amount_out`: Minimum acceptable payout (proportional for partial fills).
+/// Hot Potato. Created by take_intent_*(), must be consumed by settle_intent_*().
 public struct IntentReceipt<phantom Sell, phantom Buy> {
-    intent_id: ID,
     owner: address,
     sell_amount: u64,
     min_amount_out: u64,
 }
 
-/// Commitment entry for a solver in commit phase.
-/// * `score`: Estimated surplus committed by solver (in USDC-scaled units).
-/// * `bond`: SUI balance for griefing protection.
-/// * `timestamp`: When committed (for tiebreaker).
-public struct CommitEntry has store {
-    score: u64,
-    bond: Balance<SUI>,
-    timestamp: u64,
-}
-
-/// Batch auction state machine.
-/// * `id`: Unique object ID.
-/// * `batch_id`: Batch sequence number.
-/// * `intent_ids`: Vector of Intent IDs in this batch.
-/// * `phase`: Current phase.
-/// * `commit_end_ms`: Deadline for commit phase.
-/// * `execute_deadline_ms`: Deadline for execution (commit_end + grace).
-/// * `commits`: Table of solver commitments.
-/// * `winner`: Winning solver address.
-/// * `winner_score`: Winning score.
-public struct AuctionState has key {
-    id: UID,
-    batch_id: u64,
-    intent_ids: VecSet<ID>,
-    phase: AuctionPhase,
-    commit_end_ms: u64,
-    execute_deadline_ms: u64,
-    commits: Table<address, CommitEntry>,
-    winner: Option<address>,
-    winner_score: u64,
-    runner_up: Option<address>,
-    runner_up_score: u64,
-}
-
 // === Events ===
 
-/// Emitted when a new batch is opened.
-public struct BatchOpenedEvent has copy, drop {
-    batch_id: u64,
-    auction_state_id: ID,
-    intent_ids: vector<ID>,
+public struct EpochStartedEvent has copy, drop {
+    epoch_id: u64,
     commit_end_ms: u64,
-    execute_deadline_ms: u64,
 }
 
-/// Emitted when winner is selected after commit phase closes.
 public struct WinnerSelectedEvent has copy, drop {
-    batch_id: u64,
+    epoch_id: u64,
     winner: address,
     winner_score: u64,
     runner_up: Option<address>,
     runner_up_score: u64,
 }
 
-/// Emmited when batch aborted due to no commits.
-public struct BatchAbortedEvent has copy, drop {
-    batch_id: u64,
+public struct EpochAbortedEvent has copy, drop {
+    epoch_id: u64,
 }
 
-/// Emitted when settlement completes successfully.
 public struct SettlementCompleteEvent has copy, drop {
-    batch_id: u64,
+    epoch_id: u64,
     winner: address,
     actual_surplus: u64,
     committed_score: u64,
 }
 
-/// Emitted when fallback is triggered (winner failed to execute).
 public struct FallbackTriggeredEvent has copy, drop {
-    batch_id: u64,
+    epoch_id: u64,
     winner: address,
     bond_slashed: u64,
 }
 
-// === Functions ===
+public struct SolverRegisteredEvent has copy, drop {
+    solver: address,
+    bond_amount: u64,
+}
+
+public struct SolverDeregisteredEvent has copy, drop {
+    solver: address,
+}
+
+// === Initialization ===
+
+fun init(ctx: &mut TxContext) {
+    transfer::share_object(AuctionState {
+        id: object::new(ctx),
+        current_epoch_id: 0,
+        phase: AuctionPhase::Idle,
+        commit_end_ms: 0,
+        execute_deadline_ms: 0,
+        committed: vec_set::empty(),
+        winner: option::none(),
+        winner_score: 0,
+        runner_up: option::none(),
+        runner_up_score: 0,
+        current_epoch_surplus: 0,
+        intent_ids: vec_set::empty(),
+    });
+
+    transfer::share_object(SolverRegistry {
+        id: object::new(ctx),
+        solvers: vec_set::empty(),
+        bonds: table::new(ctx),
+    });
+}
+
+// === Intent Lifecycle ===
+
+/// Submit a new intent into the current batch.
+public fun submit_intent<SellCoin, BuyCoin>(
+    state: &mut AuctionState,
+    coin: Coin<SellCoin>,
+    min_amount_out: u64,
+    partial_fillable: bool,
+    deadline: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let id = intent_book::create_intent<SellCoin, BuyCoin>(
+        coin,
+        min_amount_out,
+        partial_fillable,
+        deadline,
+        clock,
+        ctx,
+    );
+    state.intent_ids.insert(id);
+}
+
+/// Cancel an intent and retrieve coins.
+public fun cancel_intent<SellCoin, BuyCoin>(
+    state: &mut AuctionState,
+    intent: Intent<SellCoin, BuyCoin>,
+    ctx: &mut TxContext,
+) {
+    let id = intent.intent_id();
+    state.intent_ids.remove(&id);
+    intent.cancel_intent(ctx);
+}
+
+// === Solver Registration ===
+
+public fun register_solver(
+    registry: &mut SolverRegistry,
+    bond: Coin<SUI>,
+    config: &GlobalConfig,
+    ctx: &TxContext,
+) {
+    let solver = ctx.sender();
+    assert!(!registry.solvers.contains(&solver), ESolverAlreadyRegistered);
+    assert!(bond.value() >= config.min_bond(), EBondTooSmall);
+
+    let bond_amount = bond.value();
+    registry.solvers.insert(solver);
+    registry.bonds.add(solver, bond.into_balance());
+
+    emit(SolverRegisteredEvent { solver, bond_amount });
+}
+
+#[allow(lint(self_transfer))]
+public fun deregister_solver(
+    registry: &mut SolverRegistry,
+    state: &AuctionState,
+    ctx: &mut TxContext,
+) {
+    assert!(is_terminal_phase(state), EWrongPhase);
+
+    let solver = ctx.sender();
+    assert!(registry.solvers.contains(&solver), ESolverNotRegistered);
+
+    registry.solvers.remove(&solver);
+    let bond_bal = registry.bonds.remove(solver);
+    transfer::public_transfer(bond_bal.into_coin(ctx), solver);
+
+    emit(SolverDeregisteredEvent { solver });
+}
+
+// === Epoch Lifecycle ===
+
+/// Advance to the next epoch's commit phase (permissionless).
+///
+/// Clears committed set and resets phase to Commit.
+/// Does NOT clear intent_ids — partial fill intents carry over automatically.
+public fun advance_epoch(state: &mut AuctionState, config: &GlobalConfig, clock: &Clock) {
+    let now = clock.timestamp_ms();
+    let is_timed_out_commit = state.phase == AuctionPhase::Commit && now >= state.commit_end_ms;
+
+    assert!(is_terminal_phase(state) || is_timed_out_commit, EWrongPhase);
+
+    let settling_epoch = if (state.phase == AuctionPhase::Idle) {
+        state.current_epoch_id
+    } else {
+        state.current_epoch_id + 1
+    };
+
+    let epoch_end_ms = (settling_epoch + 1) * config.epoch_duration_ms();
+    assert!(now >= epoch_end_ms, EInvalidDeadline);
+
+    if (is_timed_out_commit) {
+        emit(EpochAbortedEvent { epoch_id: state.current_epoch_id });
+    };
+
+    state.current_epoch_id = settling_epoch;
+    state.phase = AuctionPhase::Commit;
+    state.committed = vec_set::empty();
+    state.commit_end_ms = now + config.commit_duration_ms();
+    state.execute_deadline_ms = 0;
+    state.winner = option::none();
+    state.runner_up = option::none();
+    state.winner_score = 0;
+    state.runner_up_score = 0;
+    state.current_epoch_surplus = 0;
+    // intent_ids intentionally NOT cleared — partial fills carry over
+
+    emit(EpochStartedEvent {
+        epoch_id: settling_epoch,
+        commit_end_ms: state.commit_end_ms,
+    });
+}
+
+/// Submit a score commitment during commit phase.
+public fun commit(
+    registry: &SolverRegistry,
+    state: &mut AuctionState,
+    score: u64,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
+    let now = clock.timestamp_ms();
+    assert!(now < state.commit_end_ms, EInvalidDeadline);
+
+    let sender = ctx.sender();
+    assert!(registry.solvers.contains(&sender), ESolverNotRegistered);
+
+    if (!state.committed.contains(&sender)) {
+        state.committed.insert(sender);
+    };
+
+    // Always update leaderboard if this score is better.
+    if (state.winner.is_none()) {
+        state.winner = option::some(sender);
+        state.winner_score = score;
+    } else {
+        let current_winner = *state.winner.borrow();
+        if (score > state.winner_score) {
+            state.runner_up = option::some(current_winner);
+            state.runner_up_score = state.winner_score;
+            state.winner = option::some(sender);
+            state.winner_score = score;
+        } else if (score > state.runner_up_score && sender != current_winner) {
+            state.runner_up = option::some(sender);
+            state.runner_up_score = score;
+        };
+    };
+}
+
+// === Settlement ===
+
+/// Take all sell assets from intent selling Base (full fill).
+/// Removes intent ID from AuctionState.intent_ids.
+/// Returns (Coin<Base>, IntentReceipt) — receipt must be consumed by settle_intent_base_to_quote.
+public fun take_intent_base_to_quote<Base, Quote>(
+    registry: &SolverRegistry,
+    state: &mut AuctionState,
+    config: &GlobalConfig,
+    intent: Intent<Base, Quote>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<Base>, IntentReceipt<Base, Quote>) {
+    assert_settle_authorized(registry, state, config, clock, ctx);
+    let id = intent.intent_id();
+    assert!(state.intent_ids.contains(&id), ENotInBatch);
+    state.intent_ids.remove(&id);
+
+    let (owner, sell_balance, min_amount_out) = intent.consume_intent();
+    let receipt = IntentReceipt<Base, Quote> {
+        owner,
+        sell_amount: sell_balance.value(),
+        min_amount_out,
+    };
+    (sell_balance.into_coin(ctx), receipt)
+}
+
+/// Take all sell assets from intent selling Quote (full fill).
+public fun take_intent_quote_to_base<Base, Quote>(
+    registry: &SolverRegistry,
+    state: &mut AuctionState,
+    config: &GlobalConfig,
+    intent: Intent<Quote, Base>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<Quote>, IntentReceipt<Quote, Base>) {
+    assert_settle_authorized(registry, state, config, clock, ctx);
+    let id = intent.intent_id();
+    assert!(state.intent_ids.contains(&id), ENotInBatch);
+    state.intent_ids.remove(&id);
+
+    let (owner, sell_balance, min_amount_out) = intent.consume_intent();
+    let receipt = IntentReceipt<Quote, Base> {
+        owner,
+        sell_amount: sell_balance.value(),
+        min_amount_out,
+    };
+    (sell_balance.into_coin(ctx), receipt)
+}
+
+/// Take partial sell assets from intent selling Base.
+/// Intent stays alive; its ID remains in intent_ids for the next epoch.
+public fun take_intent_partial_base_to_quote<Base, Quote>(
+    registry: &SolverRegistry,
+    state: &mut AuctionState,
+    config: &GlobalConfig,
+    intent: &mut Intent<Base, Quote>,
+    fill_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<Base>, IntentReceipt<Base, Quote>) {
+    assert_settle_authorized(registry, state, config, clock, ctx);
+    let id = intent.intent_id();
+    assert!(state.intent_ids.contains(&id), ENotInBatch);
+    // Do NOT remove from intent_ids — remaining balance carries over to next epoch
+
+    let (owner, partial_balance, proportional_min_out) = intent.consume_intent_partial(fill_amount);
+    let receipt = IntentReceipt<Base, Quote> {
+        owner,
+        sell_amount: fill_amount,
+        min_amount_out: proportional_min_out,
+    };
+    (partial_balance.into_coin(ctx), receipt)
+}
+
+/// Take partial sell assets from intent selling Quote.
+/// Intent stays alive; its ID remains in intent_ids for the next epoch.
+public fun take_intent_partial_quote_to_base<Base, Quote>(
+    registry: &SolverRegistry,
+    state: &mut AuctionState,
+    config: &GlobalConfig,
+    intent: &mut Intent<Quote, Base>,
+    fill_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<Quote>, IntentReceipt<Quote, Base>) {
+    assert_settle_authorized(registry, state, config, clock, ctx);
+    let id = intent.intent_id();
+    assert!(state.intent_ids.contains(&id), ENotInBatch);
+    // Do NOT remove from intent_ids — remaining balance carries over to next epoch
+
+    let (owner, partial_balance, proportional_min_out) = intent.consume_intent_partial(fill_amount);
+    let receipt = IntentReceipt<Quote, Base> {
+        owner,
+        sell_amount: fill_amount,
+        min_amount_out: proportional_min_out,
+    };
+    (partial_balance.into_coin(ctx), receipt)
+}
+
+/// Settle an intent that sold Base — verify payout, pay user, accumulate surplus.
+public fun settle_intent_base_to_quote<Base, Quote>(
+    state: &mut AuctionState,
+    receipt: IntentReceipt<Base, Quote>,
+    payout: Coin<Quote>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+) {
+    let IntentReceipt<Base, Quote> { owner, sell_amount, min_amount_out } = receipt;
+    let price_floor = calculate_price_floor(pool, true, sell_amount, min_amount_out, clock);
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    state.current_epoch_surplus = state.current_epoch_surplus + (payout.value() - price_floor);
+    transfer::public_transfer(payout, owner);
+}
+
+/// Settle an intent that sold Quote — verify payout, pay user, accumulate surplus.
+public fun settle_intent_quote_to_base<Base, Quote>(
+    state: &mut AuctionState,
+    receipt: IntentReceipt<Quote, Base>,
+    payout: Coin<Base>,
+    pool: &DeepbookPool<Base, Quote>,
+    clock: &Clock,
+) {
+    let IntentReceipt<Quote, Base> { owner, sell_amount, min_amount_out } = receipt;
+    let price_floor = calculate_price_floor(pool, false, sell_amount, min_amount_out, clock);
+    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
+    state.current_epoch_surplus = state.current_epoch_surplus + (payout.value() - price_floor);
+    transfer::public_transfer(payout, owner);
+}
+
+/// Close the current settlement batch.
+/// Verifies accumulated surplus meets committed score threshold, marks epoch Done.
+public fun close_batch(state: &mut AuctionState, config: &GlobalConfig) {
+    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
+
+    let threshold =
+        ((state.winner_score as u128) * (config.score_tolerance_bps() as u128) / 10_000u128) as u64;
+    assert!(state.current_epoch_surplus >= threshold, EScoreMismatch);
+
+    let winner = *state.winner.borrow();
+    state.phase = AuctionPhase::Done;
+
+    emit(SettlementCompleteEvent {
+        epoch_id: state.current_epoch_id,
+        winner,
+        actual_surplus: state.current_epoch_surplus,
+        committed_score: state.winner_score,
+    });
+}
+
+/// Trigger fallback if winner fails to execute within grace period (permissionless).
+#[allow(lint(self_transfer))]
+public fun trigger_fallback(
+    state: &mut AuctionState,
+    registry: &mut SolverRegistry,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
+    assert!(clock.timestamp_ms() > state.execute_deadline_ms, EInvalidDeadline);
+
+    let winner = *state.winner.borrow();
+    let bond_bal = registry.bonds.remove(winner);
+    let slashed_amount = bond_bal.value();
+    registry.solvers.remove(&winner);
+
+    transfer::public_transfer(bond_bal.into_coin(ctx), ctx.sender());
+    state.phase = AuctionPhase::Failed;
+
+    emit(FallbackTriggeredEvent {
+        epoch_id: state.current_epoch_id,
+        winner,
+        bond_slashed: slashed_amount,
+    });
+}
+
+// === Getters ===
+
+public fun phase(state: &AuctionState): AuctionPhase { state.phase }
+
+public fun current_epoch_id(state: &AuctionState): u64 { state.current_epoch_id }
+
+public fun winner(state: &AuctionState): Option<address> { state.winner }
+
+public fun runner_up(state: &AuctionState): Option<address> { state.runner_up }
+
+public fun winner_score(state: &AuctionState): u64 { state.winner_score }
+
+public fun commit_end_ms(state: &AuctionState): u64 { state.commit_end_ms }
+
+public fun execute_deadline_ms(state: &AuctionState): u64 { state.execute_deadline_ms }
+
+public fun current_epoch_surplus(state: &AuctionState): u64 { state.current_epoch_surplus }
+
+public fun intent_count(state: &AuctionState): u64 { state.intent_ids.length() }
+
+public fun has_intent(state: &AuctionState, id: ID): bool { state.intent_ids.contains(&id) }
+
+public fun is_idle_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Idle }
+
+public fun is_commit_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Commit }
+
+public fun is_execute_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Execute }
+
+public fun is_done_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Done }
+
+public fun is_failed_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Failed }
+
+public fun is_aborted_phase(state: &AuctionState): bool { state.phase == AuctionPhase::Aborted }
+
+public fun solver_count(registry: &SolverRegistry): u64 { registry.solvers.length() }
+
+public fun is_registered(registry: &SolverRegistry, solver: address): bool {
+    registry.solvers.contains(&solver)
+}
+
+// === Internal helpers ===
 
 fun calculate_price_floor<Base, Quote>(
     pool: &DeepbookPool<Base, Quote>,
@@ -166,7 +530,7 @@ fun calculate_price_floor<Base, Quote>(
     let mid_price = if (is_base_to_quote) {
         pool_mid_price
     } else {
-        let flipped_u128 = (scaling  * scaling) / (pool_mid_price as u128);
+        let flipped_u128 = (scaling * scaling) / (pool_mid_price as u128);
         assert!(flipped_u128 <= math::max_u64(), EClearingPriceMismatch);
         (flipped_u128 as u64)
     };
@@ -176,581 +540,99 @@ fun calculate_price_floor<Base, Quote>(
 
     let slippage_u128 = (fair_out as u128) * SLIPPAGE_TOLERANCE_NUM / SLIPPAGE_TOLERANCE_DENOM;
     assert!(slippage_u128 <= math::max_u64(), EClearingPriceMismatch);
-    let slippage_protection = (slippage_u128 as u64);
-    u64::max(user_min_out, slippage_protection)
+    (u64::max(user_min_out, (slippage_u128 as u64)))
 }
 
-/// Initialize global batch counter.
-fun init(ctx: &mut TxContext) {
-    transfer::share_object(BatchRegistry {
-        id: object::new(ctx),
-        next_batch_id: 0,
-    });
+fun is_terminal_phase(state: &AuctionState): bool {
+    state.phase == AuctionPhase::Idle ||
+    state.phase == AuctionPhase::Done ||
+    state.phase == AuctionPhase::Failed ||
+    state.phase == AuctionPhase::Aborted
 }
 
-/// Entry func to open a new batch auction and share.
-///
-/// * `batch_state`: Global batch counter state.
-/// * `config`: GlobalConfig for protocol parameters.
-/// * `intent_ids`: Vector of Intent IDs in this batch.
-/// * `clock`: Sui clock.
-/// * `ctx`: Transaction context.
-entry fun open_batch_and_share(
-    batch_state: &mut BatchRegistry,
-    config: &GlobalConfig,
-    intent_ids: vector<ID>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    let state = open_batch(batch_state, config, intent_ids, clock, ctx);
-    transfer::share_object(state);
-}
-
-/// Open a new batch auction.
-///
-/// * `batch_state`: Global batch counter state.
-/// * `config`: GlobalConfig for protocol parameters.
-/// * `intent_ids`: Vector of Intent IDs in this batch.
-/// * `clock`: Sui clock.
-/// * `ctx`: Transaction context.
-public fun open_batch(
-    batch_state: &mut BatchRegistry,
-    config: &GlobalConfig,
-    intent_ids: vector<ID>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): AuctionState {
-    let batch_id = batch_state.next_batch_id;
-    batch_state.next_batch_id = batch_id + 1;
-
-    let current_time_ms = clock.timestamp_ms();
-    let commit_end_ms = current_time_ms + config.commit_duration_ms();
-    let execute_deadline_ms = commit_end_ms + config.grace_period_ms();
-
-    let intent_ids_vecset = vec_set::from_keys(intent_ids);
-
-    let state = AuctionState {
-        id: object::new(ctx),
-        batch_id,
-        intent_ids: intent_ids_vecset,
-        phase: AuctionPhase::Commit,
-        commit_end_ms,
-        execute_deadline_ms,
-        commits: table::new(ctx),
-        winner: option::none(),
-        winner_score: 0,
-        runner_up: option::none(),
-        runner_up_score: 0,
-    };
-
-    emit(BatchOpenedEvent {
-        batch_id,
-        auction_state_id: state.id.to_inner(),
-        intent_ids,
-        commit_end_ms,
-        execute_deadline_ms,
-    });
-
-    state
-}
-
-/// Submit a score commitment during commit phase.
-///
-/// * `config`: GlobalConfig for protocol parameters.
-/// * `state`: AuctionState.
-/// * `score`: n_cow_pairs committed by solver.
-/// * `bond`: SUI bond for griefing protection.
-/// * `clock`: Sui clock.
-/// * `ctx`: Transaction context.
-public fun commit(
-    config: &GlobalConfig,
+/// Check settlement authorization and auto-transition Commit → Execute on first take_intent call.
+fun assert_settle_authorized(
+    registry: &SolverRegistry,
     state: &mut AuctionState,
-    score: u64,
-    bond: Coin<SUI>,
+    config: &GlobalConfig,
     clock: &Clock,
     ctx: &TxContext,
 ) {
-    assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
-    let current_time_ms = clock.timestamp_ms();
-    assert!(current_time_ms < state.commit_end_ms, EInvalidDeadline);
-    assert!(bond.value() >= config.min_bond(), EBondTooSmall);
-
+    let now = clock.timestamp_ms();
     let sender = ctx.sender();
-    assert!(!state.commits.contains(sender), EDuplicateCommit);
 
-    let entry = CommitEntry {
-        score,
-        bond: bond.into_balance(),
-        timestamp: current_time_ms,
-    };
-    state.commits.add(sender, entry);
+    if (state.phase == AuctionPhase::Commit) {
+        let all_committed = state.committed.length() == registry.solvers.length();
+        let time_expired = now >= state.commit_end_ms;
+        assert!(all_committed || time_expired, ESettleConditionsNotMet);
 
-    if (state.winner.is_none()) {
-        state.winner = option::some(sender);
-        state.winner_score = score;
-    } else {
-        let current_winner = *state.winner.borrow();
+        assert!(state.winner.is_some(), ENotWinner);
+        let winner = *state.winner.borrow();
+        assert!(winner == sender, ENotWinner);
 
-        if (score > state.winner_score) {
-            state.runner_up = option::some(current_winner);
-            state.runner_up_score = state.winner_score;
-            state.winner = option::some(sender);
-            state.winner_score = score;
-        } else if (score > state.runner_up_score) {
-            state.runner_up = option::some(sender);
-            state.runner_up_score = score;
-        };
-    };
-}
-
-/// Close commit phase and transition to Execute phase.
-///
-/// * `state`: AuctionState.
-/// * `clock`: Sui clock.
-public fun close_commits(state: &mut AuctionState, clock: &Clock) {
-    let current_time_ms = clock.timestamp_ms();
-    assert!(state.phase == AuctionPhase::Commit, EWrongPhase);
-    assert!(current_time_ms >= state.commit_end_ms, EInvalidDeadline);
-
-    if (state.winner.is_none()) {
-        state.phase = AuctionPhase::Aborted;
-        emit(BatchAbortedEvent { batch_id: state.batch_id });
-    } else {
         state.phase = AuctionPhase::Execute;
+        state.execute_deadline_ms = now + config.grace_period_ms();
+        state.current_epoch_surplus = 0;
 
         emit(WinnerSelectedEvent {
-            batch_id: state.batch_id,
-            winner: *state.winner.borrow(),
+            epoch_id: state.current_epoch_id,
+            winner,
             winner_score: state.winner_score,
             runner_up: state.runner_up,
             runner_up_score: state.runner_up_score,
         });
+    } else {
+        assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
+        assert!(now <= state.execute_deadline_ms, EInvalidDeadline);
+        let winner = *state.winner.borrow();
+        assert!(winner == sender, ENotWinner);
     }
-}
-
-/// Winner calls to open settlement and receive Hot Potato ticket.
-///
-/// * `state`: AuctionState.
-/// * `clock`: Sui clock.
-/// * `ctx`: Transaction context.
-public fun open_settlement(
-    state: &mut AuctionState,
-    clock: &Clock,
-    ctx: &TxContext,
-): SettlementTicket {
-    let current_time_ms = clock.timestamp_ms();
-    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
-    assert!(current_time_ms <= state.execute_deadline_ms, EInvalidDeadline);
-    assert!(state.winner.is_some(), ENotWinner);
-
-    let winner = *state.winner.borrow();
-    assert!(winner == ctx.sender(), ENotWinner);
-
-    SettlementTicket {
-        batch_id: state.batch_id,
-        intent_ids: state.intent_ids,
-        committed_score: state.winner_score,
-        actual_surplus: 0,
-    }
-}
-
-/// Take all sell assets from intent selling Base (full fill).
-/// Returns sell coins for solver to use + IntentReceipt hot potato.
-/// intent_id is NOT yet removed from ticket — must call settle_intent_base_to_quote.
-///
-/// * `ticket`: SettlementTicket.
-/// * `intent`: Intent<Base, Quote> — consumed (deleted on-chain).
-/// * `ctx`: Transaction context.
-///
-/// Returns: `(Coin<Base>, IntentReceipt<Base, Quote>)`
-public fun take_intent_base_to_quote<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    intent: Intent<Base, Quote>,
-    ctx: &mut TxContext,
-): (Coin<Base>, IntentReceipt<Base, Quote>) {
-    let intent_id_val = intent_book::intent_id(&intent);
-    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-
-    let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
-    let sell_amount = sell_balance.value();
-
-    let receipt = IntentReceipt<Base, Quote> {
-        intent_id: intent_id_val,
-        owner,
-        sell_amount,
-        min_amount_out,
-    };
-
-    (sell_balance.into_coin(ctx), receipt)
-}
-
-/// Take all sell assets from intent selling Quote (full fill).
-/// Returns sell coins for solver to use + IntentReceipt hot potato.
-/// intent_id is NOT yet removed from ticket — must call settle_intent_quote_to_base.
-///
-/// * `ticket`: SettlementTicket.
-/// * `intent`: Intent<Quote, Base> — consumed (deleted on-chain).
-/// * `ctx`: Transaction context.
-///
-/// Returns: `(Coin<Quote>, IntentReceipt<Quote, Base>)`
-public fun take_intent_quote_to_base<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    intent: Intent<Quote, Base>,
-    ctx: &mut TxContext,
-): (Coin<Quote>, IntentReceipt<Quote, Base>) {
-    let intent_id_val = intent_book::intent_id(&intent);
-    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-
-    let (owner, sell_balance, min_amount_out) = intent_book::consume_intent(intent);
-    let sell_amount = sell_balance.value();
-
-    let receipt = IntentReceipt<Quote, Base> {
-        intent_id: intent_id_val,
-        owner,
-        sell_amount,
-        min_amount_out,
-    };
-
-    (sell_balance.into_coin(ctx), receipt)
-}
-
-/// Take partial sell assets from intent selling Base.
-/// Intent stays alive on-chain for remaining balance.
-/// intent_id is NOT yet removed from ticket — must call settle_intent_base_to_quote.
-///
-/// * `ticket`: SettlementTicket.
-/// * `intent`: &mut Intent<Base, Quote> — mutated, stays on-chain.
-/// * `fill_amount`: Base units to take this round.
-/// * `ctx`: Transaction context.
-///
-/// Returns: `(Coin<Base>, IntentReceipt<Base, Quote>)`
-public fun take_intent_partial_base_to_quote<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    intent: &mut Intent<Base, Quote>,
-    fill_amount: u64,
-    ctx: &mut TxContext,
-): (Coin<Base>, IntentReceipt<Base, Quote>) {
-    let intent_id_val = intent_book::intent_id(intent);
-    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-
-    let (owner, partial_balance, proportional_min_out) = intent_book::consume_intent_partial(
-        intent,
-        fill_amount,
-    );
-
-    let receipt = IntentReceipt<Base, Quote> {
-        intent_id: intent_id_val,
-        owner,
-        sell_amount: fill_amount,
-        min_amount_out: proportional_min_out,
-    };
-
-    (partial_balance.into_coin(ctx), receipt)
-}
-
-/// Take partial sell assets from intent selling Quote.
-/// Intent stays alive on-chain for remaining balance.
-/// intent_id is NOT yet removed from ticket — must call settle_intent_quote_to_base.
-///
-/// * `ticket`: SettlementTicket.
-/// * `intent`: &mut Intent<Quote, Base> — mutated, stays on-chain.
-/// * `fill_amount`: Quote units to take this round.
-/// * `ctx`: Transaction context.
-///
-/// Returns: `(Coin<Quote>, IntentReceipt<Quote, Base>)`
-public fun take_intent_partial_quote_to_base<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    intent: &mut Intent<Quote, Base>,
-    fill_amount: u64,
-    ctx: &mut TxContext,
-): (Coin<Quote>, IntentReceipt<Quote, Base>) {
-    let intent_id_val = intent_book::intent_id(intent);
-    assert!(vec_set::contains(&ticket.intent_ids, &intent_id_val), EWrongBatch);
-
-    let (owner, partial_balance, proportional_min_out) = intent_book::consume_intent_partial(
-        intent,
-        fill_amount,
-    );
-
-    let receipt = IntentReceipt<Quote, Base> {
-        intent_id: intent_id_val,
-        owner,
-        sell_amount: fill_amount,
-        min_amount_out: proportional_min_out,
-    };
-
-    (partial_balance.into_coin(ctx), receipt)
-}
-
-/// Settle an intent that sold Base — consume IntentReceipt, verify payout, pay user.
-/// Works for both full fills (from take_intent_base_to_quote) and
-/// partial fills (from take_intent_partial_base_to_quote).
-///
-/// * `ticket`: SettlementTicket.
-/// * `receipt`: IntentReceipt<Base, Quote> — hot potato, consumed here.
-/// * `payout`: Coin<Quote> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock.
-public fun settle_intent_base_to_quote<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    receipt: IntentReceipt<Base, Quote>,
-    payout: Coin<Quote>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
-) {
-    let IntentReceipt<Base, Quote> { intent_id, owner, sell_amount, min_amount_out } = receipt;
-    vec_set::remove(&mut ticket.intent_ids, &intent_id);
-
-    let price_floor = calculate_price_floor(pool, true, sell_amount, min_amount_out, clock);
-    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
-
-    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-    transfer::public_transfer(payout, owner);
-}
-
-/// Settle an intent that sold Quote — consume IntentReceipt, verify payout, pay user.
-/// Works for both full fills (from take_intent_quote_to_base) and
-/// partial fills (from take_intent_partial_quote_to_base).
-///
-/// * `ticket`: SettlementTicket.
-/// * `receipt`: IntentReceipt<Quote, Base> — hot potato, consumed here.
-/// * `payout`: Coin<Base> — payout for intent owner.
-/// * `pool`: DeepbookPool<Base, Quote>.
-/// * `clock`: Sui clock.
-public fun settle_intent_quote_to_base<Base, Quote>(
-    ticket: &mut SettlementTicket,
-    receipt: IntentReceipt<Quote, Base>,
-    payout: Coin<Base>,
-    pool: &DeepbookPool<Base, Quote>,
-    clock: &Clock,
-) {
-    let IntentReceipt<Quote, Base> { intent_id, owner, sell_amount, min_amount_out } = receipt;
-    vec_set::remove(&mut ticket.intent_ids, &intent_id);
-
-    let price_floor = calculate_price_floor(pool, false, sell_amount, min_amount_out, clock);
-    assert!(payout.value() >= price_floor, EClearingPriceMismatch);
-
-    ticket.actual_surplus = ticket.actual_surplus + (payout.value() - price_floor);
-    transfer::public_transfer(payout, owner);
-}
-
-/// Close settlement — consume Hot Potato, verify score, return winner bond.
-///
-/// * `state`: AuctionState.
-/// * `ticket`: SettlementTicket (consumed — satisfaction check).
-/// * `config`: GlobalConfig for score_tolerance_bps.
-/// * `ctx`: Transaction context.
-public fun close_settlement(
-    state: &mut AuctionState,
-    ticket: SettlementTicket,
-    config: &GlobalConfig,
-    ctx: &mut TxContext,
-) {
-    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
-
-    let SettlementTicket {
-        batch_id,
-        intent_ids,
-        committed_score,
-        actual_surplus,
-    } = ticket;
-
-    assert!(batch_id == state.batch_id, EWrongBatch);
-
-    // Enforce that every intent in the batch was processed
-    assert!(vec_set::is_empty(&intent_ids), EIncompleteBatch);
-
-    // Verify actual surplus >= score_tolerance_bps% of committed score.
-    let threshold =
-        (
-            (committed_score as u128) * (config.score_tolerance_bps() as u128) / 10_000u128 as u128,
-        ) as u64;
-    assert!(actual_surplus >= threshold, EScoreMismatch);
-
-    let winner = *state.winner.borrow();
-
-    // Return winner's bond
-    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(winner);
-    transfer::public_transfer(bond.into_coin(ctx), winner);
-
-    state.phase = AuctionPhase::Done;
-
-    emit(SettlementCompleteEvent {
-        batch_id: state.batch_id,
-        winner,
-        actual_surplus,
-        committed_score,
-    });
-}
-
-/// Trigger fallback if winner fails to execute within grace period.
-///
-/// * `state`: AuctionState.
-/// * `clock`: Sui clock.
-/// * `ctx`: Transaction context.
-#[allow(lint(self_transfer))]
-public fun trigger_fallback(state: &mut AuctionState, clock: &Clock, ctx: &mut TxContext) {
-    assert!(state.phase == AuctionPhase::Execute, EWrongPhase);
-    let current_time_ms = clock.timestamp_ms();
-    assert!(current_time_ms > state.execute_deadline_ms, EInvalidDeadline);
-
-    let winner = *state.winner.borrow();
-    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(winner);
-    let slashed_amount = bond.value();
-
-    transfer::public_transfer(bond.into_coin(ctx), ctx.sender());
-
-    state.phase = AuctionPhase::Failed;
-
-    emit(FallbackTriggeredEvent {
-        batch_id: state.batch_id,
-        winner,
-        bond_slashed: slashed_amount,
-    });
-}
-
-/// Unlock an intent after its batch reaches a terminal phase (Done, Failed, Aborted).
-/// Allows the intent to be cancelled or added to a new batch.
-///
-/// * `state`: AuctionState whose phase must be Done, Failed, or Aborted.
-/// * `intent`: Intent to unlock.
-public fun unlock_batch_intent<SellCoin, BuyCoin>(
-    state: &AuctionState,
-    intent: &mut Intent<SellCoin, BuyCoin>,
-) {
-    assert!(
-        state.phase == AuctionPhase::Done ||
-        state.phase == AuctionPhase::Failed ||
-        state.phase == AuctionPhase::Aborted,
-        EWrongPhase,
-    );
-    let intent_id_val = intent_book::intent_id(intent);
-    assert!(vec_set::contains(&state.intent_ids, &intent_id_val), EWrongBatch);
-    intent_book::unlock_intent(intent);
-}
-
-/// Losing solvers withdraw their bonds after batch is Done or Failed.
-///
-/// * `state`: AuctionState.
-/// * `ctx`: Transaction context.
-#[allow(lint(self_transfer))]
-public fun claim_refund(state: &mut AuctionState, ctx: &mut TxContext) {
-    assert!(state.phase == AuctionPhase::Done || state.phase == AuctionPhase::Failed, EWrongPhase);
-
-    let sender = ctx.sender();
-    assert!(state.commits.contains(sender), ENotWinner);
-
-    let CommitEntry { bond, score: _, timestamp: _ } = state.commits.remove(sender);
-    transfer::public_transfer(bond.into_coin(ctx), sender);
-}
-
-// === Getters ===
-
-/// Get current phase.
-public fun phase(state: &AuctionState): AuctionPhase {
-    state.phase
-}
-
-/// Get batch ID.
-public fun batch_id(state: &AuctionState): u64 {
-    state.batch_id
-}
-
-/// Get winning solver address.
-public fun winner(state: &AuctionState): Option<address> {
-    state.winner
-}
-
-public fun runner_up(state: &AuctionState): Option<address> {
-    state.runner_up
-}
-
-/// Get winner's committed score.
-public fun winner_score(state: &AuctionState): u64 {
-    state.winner_score
-}
-
-/// Get commit phase deadline.
-public fun commit_end_ms(state: &AuctionState): u64 {
-    state.commit_end_ms
-}
-
-/// Get execution deadline (commit_end + grace).
-public fun execute_deadline_ms(state: &AuctionState): u64 {
-    state.execute_deadline_ms
-}
-
-/// Get ticket's batch ID.
-public fun ticket_batch_id(ticket: &SettlementTicket): u64 {
-    ticket.batch_id
-}
-
-/// Get ticket's committed score.
-public fun ticket_committed_score(ticket: &SettlementTicket): u64 {
-    ticket.committed_score
-}
-
-/// Get ticket's accumulated actual surplus.
-public fun ticket_actual_surplus(ticket: &SettlementTicket): u64 {
-    ticket.actual_surplus
-}
-
-public fun is_commit_phase(state: &AuctionState): bool {
-    state.phase == AuctionPhase::Commit
-}
-
-public fun is_execute_phase(state: &AuctionState): bool {
-    state.phase == AuctionPhase::Execute
-}
-
-public fun is_done_phase(state: &AuctionState): bool {
-    state.phase == AuctionPhase::Done
-}
-
-public fun is_failed_phase(state: &AuctionState): bool {
-    state.phase == AuctionPhase::Failed
-}
-
-public fun is_aborted_phase(state: &AuctionState): bool {
-    state.phase == AuctionPhase::Aborted
-}
-
-// === Getters ===
-
-/// Get next batch ID (for monitoring/indexing).
-public fun next_batch_id(batch_state: &BatchRegistry): u64 {
-    batch_state.next_batch_id
 }
 
 // === Test Helpers ===
 
 #[test_only]
-public fun create_batch_state_for_testing(ctx: &mut TxContext): BatchRegistry {
-    BatchRegistry {
+public fun create_auction_state_for_testing(epoch_id: u64, ctx: &mut TxContext): AuctionState {
+    AuctionState {
         id: object::new(ctx),
-        next_batch_id: 0,
+        current_epoch_id: epoch_id,
+        phase: AuctionPhase::Commit,
+        commit_end_ms: u64::max_value!(),
+        execute_deadline_ms: 0,
+        committed: vec_set::empty(),
+        winner: option::none(),
+        winner_score: 0,
+        runner_up: option::none(),
+        runner_up_score: 0,
+        current_epoch_surplus: 0,
+        intent_ids: vec_set::empty(),
     }
 }
 
 #[test_only]
-public fun destroy_batch_state_for_testing(state: BatchRegistry) {
-    let BatchRegistry { id, next_batch_id: _ } = state;
-    object::delete(id);
+public fun create_solver_registry_for_testing(ctx: &mut TxContext): SolverRegistry {
+    SolverRegistry {
+        id: object::new(ctx),
+        solvers: vec_set::empty(),
+        bonds: table::new(ctx),
+    }
 }
 
 #[test_only]
-public fun create_ticket_for_testing(batch_id: u64, committed_score: u64): SettlementTicket {
-    SettlementTicket { batch_id, intent_ids: vec_set::empty(), committed_score, actual_surplus: 0 }
+public fun add_solver_for_testing(
+    registry: &mut SolverRegistry,
+    solver: address,
+    bond_amount: u64,
+    _ctx: &mut TxContext,
+) {
+    use sui::balance;
+    registry.solvers.insert(solver);
+    registry.bonds.add(solver, balance::create_for_testing<SUI>(bond_amount));
 }
 
 #[test_only]
-public fun destroy_ticket_for_testing(ticket: SettlementTicket) {
-    let SettlementTicket { .. } = ticket;
-}
-
-#[test_only]
-public fun share_state_for_testing(state: AuctionState) {
-    transfer::share_object(state);
+public fun set_commit_end_for_testing(state: &mut AuctionState, commit_end_ms: u64) {
+    state.commit_end_ms = commit_end_ms;
 }
 
 #[test_only]
@@ -763,4 +645,34 @@ public fun set_phase_execute_for_testing(state: &mut AuctionState, execute_deadl
 public fun force_winner_for_testing(state: &mut AuctionState, winner: address, score: u64) {
     state.winner = option::some(winner);
     state.winner_score = score;
+}
+
+#[test_only]
+public fun set_surplus_for_testing(state: &mut AuctionState, surplus: u64) {
+    state.current_epoch_surplus = surplus;
+}
+
+#[test_only]
+public fun add_intent_id_for_testing(state: &mut AuctionState, id: ID) {
+    state.intent_ids.insert(id);
+}
+
+#[test_only]
+public fun share_state_for_testing(state: AuctionState) {
+    transfer::share_object(state);
+}
+
+#[test_only]
+public fun share_registry_for_testing(registry: SolverRegistry) {
+    transfer::share_object(registry);
+}
+
+#[test_only]
+public fun destroy_auction_state_for_testing(state: AuctionState) {
+    std::unit_test::destroy(state);
+}
+
+#[test_only]
+public fun destroy_solver_registry_for_testing(registry: SolverRegistry) {
+    std::unit_test::destroy(registry);
 }

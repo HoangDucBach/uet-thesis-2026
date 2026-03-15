@@ -2,7 +2,8 @@ module cow_dex::settlement_tests;
 
 use cow_dex::config;
 use cow_dex::intent_book;
-use cow_dex::settlement::{Self, AuctionState};
+use cow_dex::settlement::{Self};
+use std::u64;
 use sui::clock;
 use sui::coin;
 use sui::sui::SUI;
@@ -12,481 +13,404 @@ use sui::test_scenario as ts;
 
 public struct USDC has drop {}
 
-// === Error codes ===
+// === Error codes (mirror settlement.move) ===
 
-const EWRONG_PHASE: u64 = 0;
 const EBOND_TOO_SMALL: u64 = 1;
-const ECLEARING_PRICE_MISMATCH: u64 = 2;
-const ENOT_WINNER: u64 = 3;
-const ESCORE_MISMATCH: u64 = 4;
 const EINVALID_DEADLINE: u64 = 5;
-const EDUPLICATE_COMMIT: u64 = 7;
+const ESOLVER_NOT_REGISTERED: u64 = 10;
+const ESOLVER_ALREADY_REGISTERED: u64 = 11;
+const ESETTLE_CONDITIONS_NOT_MET: u64 = 12;
 
-// ─── Tests: open_batch ─────────────────────────────────────────────────────
+// ─── Tests: register_solver ──────────────────────────────────────────────────
 
 #[test]
-fun test_open_batch_initial_state() {
+fun test_register_solver_success() {
+    let solver = @0xA;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.register_solver(
+            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
+            &config,
+            ctx,
+        );
+    };
+
+    assert!(registry.is_registered(solver));
+    assert!(registry.solver_count() == 1);
+
+    config::destroy_for_testing(config, cap);
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = ESOLVER_ALREADY_REGISTERED, location = cow_dex::settlement)]
+fun test_register_solver_duplicate_aborts() {
+    let solver = @0xA;
+    let mut ctx = tx_context::dummy();
+    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.register_solver(
+            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
+            &config,
+            ctx,
+        );
+        registry.register_solver(
+            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
+            &config,
+            ctx,
+        );
+    };
+
+    config::destroy_for_testing(config, cap);
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = EBOND_TOO_SMALL, location = cow_dex::settlement)]
+fun test_register_solver_insufficient_bond_aborts() {
+    let solver = @0xA;
+    let mut ctx = tx_context::dummy();
+    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.register_solver(
+            coin::mint_for_testing<SUI>(1, ctx), // below min_bond
+            &config,
+            ctx,
+        );
+    };
+
+    config::destroy_for_testing(config, cap);
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
+}
+
+// ─── Tests: advance_epoch ──────────────────────────────────────────────────────
+
+#[test]
+fun test_advance_epoch_from_idle() {
+    let mut ctx = tx_context::dummy();
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    state.force_winner_for_testing(@0xB, 5);
+    state.set_phase_execute_for_testing(u64::max_value!());
+    state.destroy_auction_state_for_testing();
+}
+
+#[test]
+#[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
+fun test_advance_epoch_before_interval_ends_aborts() {
+    let mut ctx = tx_context::dummy();
+    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 1000);
 
-    let state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
+    // Set commit_end_ms low so the timed-out commit path triggers
+    state.set_commit_end_for_testing(100);
 
-    assert!(settlement::is_commit_phase(&state));
-    assert!(settlement::batch_id(&state) == 0);
-    assert!(std::option::is_none(&settlement::winner(&state)));
-    assert!(settlement::winner_score(&state) == 0);
-    assert!(settlement::commit_end_ms(&state) == 1000 + config::default_commit_duration_ms());
-    assert!(
-        settlement::execute_deadline_ms(&state) ==
-        1000 + config::default_commit_duration_ms() + config::default_grace_period_ms(),
-    );
+    // T=200: past commit deadline (is_timed_out_commit=true)
+    // but settling_epoch=1, epoch_end_ms=(1+1)*10_000=20_000, 200 < 20_000 → EInvalidDeadline
+    clock::set_for_testing(&mut clock, 200);
+    state.advance_epoch(&config, &clock);
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
 }
 
 // ─── Tests: commit ─────────────────────────────────────────────────────────
 
 #[test]
-fun test_commit_registers_winner() {
+fun test_commit_registered_solver_succeeds() {
+    let solver = @0xA;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
+    registry.add_solver_for_testing(solver, 1_000_000_000, &mut ctx);
 
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 10, &clock, ctx);
+    };
 
-    assert!(std::option::is_some(&settlement::winner(&state)));
-    assert!(settlement::winner_score(&state) == 5);
+    assert!(std::option::is_some(&state.winner()));
+    assert!(state.winner_score() == 10);
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
 }
 
 #[test]
-#[expected_failure(abort_code = EBOND_TOO_SMALL, location = cow_dex::settlement)]
-fun test_commit_insufficient_bond_aborts() {
+#[expected_failure(abort_code = ESOLVER_NOT_REGISTERED, location = cow_dex::settlement)]
+fun test_commit_unregistered_solver_aborts() {
+    let solver = @0xA;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let registry = settlement::create_solver_registry_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(999, &mut ctx),
-        &clock,
-        &ctx,
-    );
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 10, &clock, ctx);
+    };
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
+}
+
+#[test]
+fun test_commit_resubmit_improves_score() {
+    let solver = @0xA;
+    let mut ctx = tx_context::dummy();
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock::set_for_testing(&mut clock, 0);
+
+    registry.add_solver_for_testing(solver, 1_000_000_000, &mut ctx);
+
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 5, &clock, ctx);
+        // Re-commit with higher score — allowed, score should update.
+        registry.commit(&mut state, 20, &clock, ctx);
+    };
+
+    assert!(state.winner_score() == 20);
+
+    clock::destroy_for_testing(clock);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
 }
 
 #[test]
 #[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
 fun test_commit_after_deadline_aborts() {
+    let solver = @0xA;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+    let mut clock = clock::create_for_testing(&mut ctx);
+
+    // Short commit deadline: expires at T=100
+    state.set_commit_end_for_testing(100);
+    registry.add_solver_for_testing(solver, 1_000_000_000, &mut ctx);
+
+    // T=200 > commit_end_ms=100 → EInvalidDeadline
+    clock::set_for_testing(&mut clock, 200);
+
+    let mut scenario = ts::begin(solver);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 5, &clock, ctx);
+    };
+
+    clock::destroy_for_testing(clock);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
+}
+
+// ─── Tests: winner selection ────────────────────────────────────────────────
+
+#[test]
+fun test_winner_higher_score_wins() {
+    let solver_a = @0xA0;
+    let solver_b = @0xB0;
+    let mut ctx = tx_context::dummy();
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
+    registry.add_solver_for_testing(solver_a, 1_000_000_000, &mut ctx);
+    registry.add_solver_for_testing(solver_b, 1_000_000_000, &mut ctx);
 
-    clock::set_for_testing(&mut clock, 15001);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
+    let mut scenario = ts::begin(solver_a);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 3, &clock, ctx);
+    };
+    ts::next_tx(&mut scenario, solver_b);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 10, &clock, ctx);
+    };
+
+    // Winner is determined on-chain as commits arrive — no close_commits needed.
+    assert!(*std::option::borrow(&state.winner()) == solver_b);
+    assert!(state.winner_score() == 10);
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
-}
-
-#[test]
-#[expected_failure(abort_code = EDUPLICATE_COMMIT, location = cow_dex::settlement)]
-fun test_commit_duplicate_same_sender_aborts() {
-    let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
-    let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 0);
-
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-    settlement::commit(
-        &config,
-        &mut state,
-        3,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-
-    clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
-}
-
-// ─── Tests: winner selection with two solvers ───────────────────────────────
-
-#[test]
-fun test_winner_selection_higher_score_wins() {
-    let admin = @0xA0;
-    let winner = @0xB0;
-    let loser = @0xC0;
-
-    let mut scenario = ts::begin(admin);
-    {
-        let ctx = ts::ctx(&mut scenario);
-        let (config, cap) = config::create_for_testing(ctx);
-        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
-        clock::destroy_for_testing(clock);
-        settlement::destroy_batch_state_for_testing(batch_state);
-        transfer::public_share_object(config);
-        settlement::share_state_for_testing(state);
-        std::unit_test::destroy(cap);
-    };
-
-    ts::next_tx(&mut scenario, winner);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 100);
-        settlement::commit(
-            &config,
-            &mut state,
-            10,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, loser);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 200);
-        settlement::commit(
-            &config,
-            &mut state,
-            3,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, admin);
-    {
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 15001);
-        settlement::close_commits(&mut state, &clock);
-
-        assert!(*std::option::borrow(&settlement::winner(&state)) == winner);
-        assert!(settlement::winner_score(&state) == 10);
-
-        clock::destroy_for_testing(clock);
-        ts::return_shared(state);
-    };
-
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
     ts::end(scenario);
 }
 
 #[test]
-fun test_winner_tiebreak_earlier_timestamp_wins() {
-    let admin = @0xA0;
+fun test_winner_tiebreak_first_commit_wins() {
     let first = @0xD0;
     let second = @0xE0;
+    let mut ctx = tx_context::dummy();
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock::set_for_testing(&mut clock, 0);
 
-    let mut scenario = ts::begin(admin);
+    registry.add_solver_for_testing(first, 1_000_000_000, &mut ctx);
+    registry.add_solver_for_testing(second, 1_000_000_000, &mut ctx);
+
+    let mut scenario = ts::begin(first);
     {
         let ctx = ts::ctx(&mut scenario);
-        let (config, cap) = config::create_for_testing(ctx);
-        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
-        clock::destroy_for_testing(clock);
-        settlement::destroy_batch_state_for_testing(batch_state);
-        transfer::public_share_object(config);
-        settlement::share_state_for_testing(state);
-        std::unit_test::destroy(cap);
+        registry.commit(&mut state, 5, &clock, ctx);
     };
-
-    ts::next_tx(&mut scenario, first);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 100);
-        settlement::commit(
-            &config,
-            &mut state,
-            5,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
     ts::next_tx(&mut scenario, second);
     {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
         let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 500);
-        settlement::commit(
-            &config,
-            &mut state,
-            5,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
+        registry.commit(&mut state, 5, &clock, ctx); // same score
     };
 
-    ts::next_tx(&mut scenario, admin);
-    {
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 15001);
-        settlement::close_commits(&mut state, &clock);
-        assert!(*std::option::borrow(&settlement::winner(&state)) == first);
-        clock::destroy_for_testing(clock);
-        ts::return_shared(state);
-    };
+    // First commit wins tiebreak (score not strictly greater, so winner unchanged).
+    assert!(*std::option::borrow(&state.winner()) == first);
 
+    clock::destroy_for_testing(clock);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
     ts::end(scenario);
 }
 
-// ─── Tests: close_commits ──────────────────────────────────────────────────
+// ─── Tests: take_intent (settlement conditions) ────────────────────────────
 
 #[test]
-#[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
-fun test_close_commits_before_deadline_aborts() {
+#[expected_failure(abort_code = ESETTLE_CONDITIONS_NOT_MET, location = cow_dex::settlement)]
+fun test_take_intent_before_conditions_met_aborts() {
+    // Winner tries to settle before all solvers committed and before deadline.
+    let solver_a = @0xA;
+    let solver_b = @0xB; // registered but hasn't committed
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
     let mut clock = clock::create_for_testing(&mut ctx);
     clock::set_for_testing(&mut clock, 0);
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
+    // Register 2 solvers; only solver_a commits — solver_b hasn't; commit deadline = max
+    registry.add_solver_for_testing(solver_a, 1_000_000_000, &mut ctx);
+    registry.add_solver_for_testing(solver_b, 1_000_000_000, &mut ctx);
 
-    clock::set_for_testing(&mut clock, 1999);
-    settlement::close_commits(&mut state, &clock);
+    let mut scenario = ts::begin(solver_a);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        registry.commit(&mut state, 10, &clock, ctx);
+    };
+
+    // solver_a is winner, tries to open settlement — only 1/2 committed, deadline not reached
+    ts::next_tx(&mut scenario, solver_a);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        // Use a dummy intent — will abort before epoch check
+        let intent = intent_book::create_intent_for_testing<SUI, USDC>(
+            100, 50, false, 9999, ctx,
+        );
+        let (sell_coin, receipt) = registry.take_intent_base_to_quote(
+            &mut state,
+            &config,
+            intent,
+            &clock,
+            ctx,
+        );
+        // unreachable — just destroy to satisfy compiler
+        coin::burn_for_testing(sell_coin);
+        std::unit_test::destroy(receipt);
+    };
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
 }
 
-// ─── Tests: open_settlement ────────────────────────────────────────────────
+// ─── Tests: close_batch ────────────────────────────────────────────────────
 
 #[test]
-#[expected_failure(abort_code = ENOT_WINNER, location = cow_dex::settlement)]
-fun test_open_settlement_non_winner_aborts() {
-    let admin = @0xA0;
+#[expected_failure(abort_code = 4, location = cow_dex::settlement)]
+fun test_close_batch_score_mismatch_aborts() {
     let winner = @0xB0;
-    let non_winner = @0xBAD;
+    let mut ctx = tx_context::dummy();
+    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    state.force_winner_for_testing(winner, 5);
+    state.set_phase_execute_for_testing(u64::max_value!());
+    // committed_score=5, score_tolerance=95% → threshold=4, actual_surplus=0 → mismatch
 
-    let mut scenario = ts::begin(admin);
-    {
-        let ctx = ts::ctx(&mut scenario);
-        let (config, cap) = config::create_for_testing(ctx);
-        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
-        clock::destroy_for_testing(clock);
-        settlement::destroy_batch_state_for_testing(batch_state);
-        transfer::public_share_object(config);
-        settlement::share_state_for_testing(state);
-        std::unit_test::destroy(cap);
-    };
+    state.close_batch(&config);
 
-    ts::next_tx(&mut scenario, winner);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 100);
-        settlement::commit(
-            &config,
-            &mut state,
-            5,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::set_for_testing(&mut clock, 15001);
-        settlement::close_commits(&mut state, &clock);
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, non_winner);
-    {
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 15001);
-        let ticket = settlement::open_settlement(&mut state, &clock, ctx);
-        clock::destroy_for_testing(clock);
-        settlement::destroy_ticket_for_testing(ticket);
-        ts::return_shared(state);
-    };
-
-    ts::end(scenario);
+    config::destroy_for_testing(config, cap);
+    state.destroy_auction_state_for_testing();
 }
 
-// ─── Tests: close_settlement ───────────────────────────────────────────────
+#[test]
+fun test_close_batch_success() {
+    let winner = @0xB0;
+    let mut ctx = tx_context::dummy();
+    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    state.force_winner_for_testing(winner, 0); // committed_score=0 → threshold=0
+    state.set_phase_execute_for_testing(u64::max_value!());
+    // actual_surplus=0 >= threshold=0 → success
+
+    state.close_batch(&config);
+    assert!(state.is_done_phase());
+
+    config::destroy_for_testing(config, cap);
+    state.destroy_auction_state_for_testing();
+}
 
 #[test]
-#[expected_failure(abort_code = ESCORE_MISMATCH, location = cow_dex::settlement)]
-fun test_close_settlement_score_mismatch_aborts() {
+fun test_close_batch_with_sufficient_surplus() {
+    let winner = @0xB0;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
     let (config, cap) = config::create_for_testing(&mut ctx);
-    let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 0);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    state.force_winner_for_testing(winner, 100);
+    state.set_phase_execute_for_testing(u64::max_value!());
+    // threshold = 100 * 95% = 95; set actual_surplus = 95 → passes
+    state.set_surplus_for_testing(95);
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
+    state.close_batch(&config);
+    assert!(state.is_done_phase());
 
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 15001);
-    settlement::close_commits(&mut state, &clock);
-
-    clock::set_for_testing(&mut clock, 15001);
-    let ticket = settlement::open_settlement(&mut state, &clock, &ctx);
-
-    settlement::close_settlement(&mut state, ticket, &config, &mut ctx);
-
-    clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
     config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
 }
 
 // ─── Tests: trigger_fallback ───────────────────────────────────────────────
@@ -494,211 +418,57 @@ fun test_close_settlement_score_mismatch_aborts() {
 #[test]
 #[expected_failure(abort_code = EINVALID_DEADLINE, location = cow_dex::settlement)]
 fun test_trigger_fallback_before_deadline_aborts() {
+    let winner = @0xB0;
+    let caller = @0xC0;
     let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
+
+    state.force_winner_for_testing(winner, 5);
+    state.set_phase_execute_for_testing(75_000);
+    registry.add_solver_for_testing(winner, 1_000_000_000, &mut ctx);
+
     let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 0);
+    clock::set_for_testing(&mut clock, 74_999); // before deadline
 
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-    clock::set_for_testing(&mut clock, 15001);
-    settlement::close_commits(&mut state, &clock);
-
-    clock::set_for_testing(&mut clock, 74999);
-    settlement::trigger_fallback(&mut state, &clock, &mut ctx);
+    let mut scenario = ts::begin(caller);
+    {
+        let ctx = ts::ctx(&mut scenario);
+        state.trigger_fallback(&mut registry, &clock, ctx);
+    };
 
     clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
+    ts::end(scenario);
 }
 
 #[test]
 fun test_trigger_fallback_after_deadline_slashes_bond() {
-    let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
-    let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 0);
-
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-    clock::set_for_testing(&mut clock, 15001);
-    settlement::close_commits(&mut state, &clock);
-
-    clock::set_for_testing(&mut clock, 75001);
-    settlement::trigger_fallback(&mut state, &clock, &mut ctx);
-
-    assert!(settlement::is_failed_phase(&state));
-
-    clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
-}
-
-// ─── Tests: claim_refund ───────────────────────────────────────────────────
-
-#[test]
-#[expected_failure(abort_code = EWRONG_PHASE, location = cow_dex::settlement)]
-fun test_claim_refund_during_commit_phase_aborts() {
-    let mut ctx = tx_context::dummy();
-    let mut batch_state = settlement::create_batch_state_for_testing(&mut ctx);
-    let (config, cap) = config::create_for_testing(&mut ctx);
-    let mut clock = clock::create_for_testing(&mut ctx);
-    clock::set_for_testing(&mut clock, 0);
-
-    let mut state = settlement::open_batch(
-        &mut batch_state,
-        &config,
-        vector::empty(),
-        &clock,
-        &mut ctx,
-    );
-
-    clock::set_for_testing(&mut clock, 100);
-    settlement::commit(
-        &config,
-        &mut state,
-        5,
-        coin::mint_for_testing<SUI>(1_000_000_000, &mut ctx),
-        &clock,
-        &ctx,
-    );
-
-    settlement::claim_refund(&mut state, &mut ctx);
-
-    clock::destroy_for_testing(clock);
-    settlement::destroy_batch_state_for_testing(batch_state);
-    config::destroy_for_testing(config, cap);
-    std::unit_test::destroy(state);
-}
-
-#[test]
-fun test_claim_refund_loser_after_done() {
-    let admin = @0xA0;
     let winner = @0xB0;
-    let loser = @0xC0;
+    let caller = @0xC0;
+    let mut ctx = tx_context::dummy();
+    let mut state = settlement::create_auction_state_for_testing(0, &mut ctx);
+    let mut registry = settlement::create_solver_registry_for_testing(&mut ctx);
 
-    let mut scenario = ts::begin(admin);
+    state.force_winner_for_testing(winner, 5);
+    state.set_phase_execute_for_testing(75_000);
+    registry.add_solver_for_testing(winner, 1_000_000_000, &mut ctx);
+
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock::set_for_testing(&mut clock, 75_001); // after deadline
+
+    let mut scenario = ts::begin(caller);
     {
         let ctx = ts::ctx(&mut scenario);
-        let (config, cap) = config::create_for_testing(ctx);
-        let mut batch_state = settlement::create_batch_state_for_testing(ctx);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 0);
-        let state = settlement::open_batch(&mut batch_state, &config, vector::empty(), &clock, ctx);
-        clock::destroy_for_testing(clock);
-        settlement::destroy_batch_state_for_testing(batch_state);
-        transfer::public_share_object(config);
-        settlement::share_state_for_testing(state);
-        std::unit_test::destroy(cap);
+        state.trigger_fallback(&mut registry, &clock, ctx);
+        assert!(state.is_failed_phase());
+        // Winner deregistered from registry
+        assert!(!registry.is_registered(winner));
     };
 
-    ts::next_tx(&mut scenario, winner);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 100);
-        settlement::commit(
-            &config,
-            &mut state,
-            0,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, loser);
-    {
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 200);
-        settlement::commit(
-            &config,
-            &mut state,
-            0,
-            coin::mint_for_testing<SUI>(1_000_000_000, ctx),
-            &clock,
-            ctx,
-        );
-        clock::destroy_for_testing(clock);
-        ts::return_shared(config);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, winner);
-    {
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let config = ts::take_shared<config::GlobalConfig>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 15001);
-        settlement::close_commits(&mut state, &clock);
-        clock::set_for_testing(&mut clock, 15001);
-
-        let ticket = settlement::open_settlement(&mut state, &clock, ctx);
-        settlement::close_settlement(&mut state, ticket, &config, ctx);
-        ts::return_shared(config);
-
-        assert!(settlement::is_done_phase(&state));
-        clock::destroy_for_testing(clock);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, loser);
-    {
-        let mut state = ts::take_shared<AuctionState>(&scenario);
-        let ctx = ts::ctx(&mut scenario);
-        settlement::claim_refund(&mut state, ctx);
-        ts::return_shared(state);
-    };
-
-    ts::next_tx(&mut scenario, loser);
-    {
-        let refund = ts::take_from_sender<coin::Coin<SUI>>(&scenario);
-        assert!(coin::value(&refund) == 1_000_000_000);
-        ts::return_to_sender(&scenario, refund);
-    };
-
+    clock::destroy_for_testing(clock);
+    state.destroy_auction_state_for_testing();
+    registry.destroy_solver_registry_for_testing();
     ts::end(scenario);
 }

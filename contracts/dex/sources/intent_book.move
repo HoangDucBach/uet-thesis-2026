@@ -9,10 +9,8 @@ use sui::event::emit;
 // === Errors ===
 const EDeadlineInPast: u64 = 0;
 const ENotIntentOwner: u64 = 1;
-const EIntentLocked: u64 = 2;
 const ENotPartialFillable: u64 = 3;
 const EFillExceedsRemaining: u64 = 4;
-const EIntentNotLocked: u64 = 5;
 
 // === Events ===
 
@@ -40,14 +38,14 @@ public struct IntentCancelledEvent has copy, drop {
 /// Shared object — user's coins locked inside until settlement or cancellation.
 ///
 /// * `id`: Shared object ID.
-/// * `locked`: True when assigned to an active batch; prevents cancellation.
 /// * `owner`: User address.
 /// * `sell_balance`: Locked coins of type SellCoin.
 /// * `min_amount_out`: User's minimum acceptable output.
+/// * `partial_fillable`: Whether this intent allows partial fills.
+/// * `filled_amount`: How much has been filled so far (in SellCoin units).
 /// * `deadline`: Unix milliseconds — intent expires after this.
 public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
     id: UID,
-    locked: bool,
     owner: address,
     sell_balance: Balance<SellCoin>,
     min_amount_out: u64,
@@ -56,27 +54,18 @@ public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
     deadline: u64,
 }
 
-// === Functions ===
+// === Package-visible functions (called via settlement module) ===
 
-/// User creates a new intent, locking coins in a shared object.
-///
-/// * `coin`: User's coin to trade (type SellCoin).
-/// * `min_amount_out`: Minimum acceptable output (in BuyCoin).
-/// * `deadline`: Unix milliseconds deadline.
-/// * `clock`: Sui clock for deadline validation.
-/// * `ctx`: Transaction context.
-///
-/// Type Parameters:
-/// * `SellCoin`: Coin type user is selling.
-/// * `BuyCoin`: Coin type user wants to receive.
-public fun create_intent<SellCoin, BuyCoin>(
+/// Create a new intent, lock coins, share on-chain. Returns the intent ID.
+/// Called by settlement::submit_intent — not directly by users.
+public(package) fun create_intent<SellCoin, BuyCoin>(
     coin: Coin<SellCoin>,
     min_amount_out: u64,
     partial_fillable: bool,
     deadline: u64,
     clock: &Clock,
     ctx: &mut TxContext,
-) {
+): ID {
     let current_time_ms = clock.timestamp_ms();
     assert!(deadline > current_time_ms, EDeadlineInPast);
 
@@ -86,7 +75,6 @@ public fun create_intent<SellCoin, BuyCoin>(
 
     let intent = Intent<SellCoin, BuyCoin> {
         id: object::new(ctx),
-        locked: false,
         owner,
         sell_balance,
         min_amount_out,
@@ -96,7 +84,6 @@ public fun create_intent<SellCoin, BuyCoin>(
     };
 
     let intent_id = intent.id.to_inner();
-
     transfer::share_object(intent);
 
     emit(IntentCreatedEvent {
@@ -109,39 +96,28 @@ public fun create_intent<SellCoin, BuyCoin>(
         partial_fillable,
         deadline,
     });
+
+    intent_id
 }
 
-/// User cancels their intent, retrieving coins.
-///
-/// * `cap`: IntentCap.
-/// * `intent`: Intent object.
-/// * `ctx`: Transaction context.
-///
-/// Type Parameters:
-/// * `SellCoin`: Coin type user is selling.
-/// * `BuyCoin`: Coin type user wanted to receive.
-public fun cancel_intent<SellCoin, BuyCoin>(
+/// Cancel an intent, return coins to owner.
+public(package) fun cancel_intent<SellCoin, BuyCoin>(
     intent: Intent<SellCoin, BuyCoin>,
     ctx: &mut TxContext,
 ) {
     let sell_amount = intent.sell_balance.value();
     let intent_id = intent.id.to_inner();
-    let Intent<SellCoin, BuyCoin> { id, locked, owner, sell_balance, .. } = intent;
+    let Intent<SellCoin, BuyCoin> { id, owner, sell_balance, .. } = intent;
 
     assert!(owner == ctx.sender(), ENotIntentOwner);
-    assert!(!locked, EIntentLocked);
 
     object::delete(id);
     transfer::public_transfer(sell_balance.into_coin(ctx), owner);
 
-    emit(IntentCancelledEvent {
-        intent_id,
-        owner,
-        sell_amount,
-    });
+    emit(IntentCancelledEvent { intent_id, owner, sell_amount });
 }
 
-/// Consume intent during settlement.
+/// Consume intent during full settlement.
 public(package) fun consume_intent<SellCoin, BuyCoin>(
     intent: Intent<SellCoin, BuyCoin>,
 ): (address, Balance<SellCoin>, u64) {
@@ -157,27 +133,9 @@ public(package) fun consume_intent<SellCoin, BuyCoin>(
     (owner, sell_balance, min_amount_out)
 }
 
-/// Lock an intent into a batch — prevents user cancellation during settlement.
-public fun lock_intent<SellCoin, BuyCoin>(intent: &mut Intent<SellCoin, BuyCoin>) {
-    intent.locked = true;
-}
-
-/// Unlock an intent after its batch has completed, failed, or been aborted.
-public(package) fun unlock_intent<SellCoin, BuyCoin>(intent: &mut Intent<SellCoin, BuyCoin>) {
-    assert!(intent.locked, EIntentNotLocked);
-    intent.locked = false;
-}
-
-/// Partially fill an intent during settlement.
-/// Intent stays alive.
-/// Caller must ensure fill_amount > 0 and intent is partial_fillable.
-///
-/// * `intent`: Mutable reference to the shared Intent.
-/// * `fill_amount`: Amount of SellCoin to fill (must be <= remaining balance).
-/// Returns: (owner address, partial_sell_balance, proportional_min_out)
+/// Partially fill an intent during settlement. Intent stays alive.
 ///
 /// proportional_min_out = min_amount_out * fill_amount / original_sell_amount
-/// where original_sell_amount = remaining + already_filled (reconstructed).
 public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
     intent: &mut Intent<SellCoin, BuyCoin>,
     fill_amount: u64,
@@ -186,10 +144,7 @@ public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
     let remaining = intent.sell_balance.value();
     assert!(fill_amount > 0 && fill_amount <= remaining, EFillExceedsRemaining);
 
-    // Reconstruct original sell amount: remaining balance + already filled
     let original_sell_amount = remaining + intent.filled_amount;
-
-    // proportional_min_out = min_amount_out * fill_amount / original_sell_amount
     let proportional_min_out =
         (intent.min_amount_out as u128) * (fill_amount as u128)
         / (original_sell_amount as u128);
@@ -202,47 +157,35 @@ public(package) fun consume_intent_partial<SellCoin, BuyCoin>(
 
 // === Getters ===
 
-/// Get intent owner.
 public fun owner<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): address {
     intent.owner
 }
 
-/// Get sell amount (derived from locked balance).
 public fun sell_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.sell_balance.value()
 }
 
-/// Get minimum output required (in BuyCoin).
 public fun min_amount_out<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.min_amount_out
 }
 
-/// Get deadline in milliseconds.
 public fun deadline<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.deadline
 }
 
-/// Whether the intent is locked into a batch.
-public fun locked<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): bool {
-    intent.locked
-}
-
-/// Whether the intent allows partial fills.
 public fun partial_fillable<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): bool {
     intent.partial_fillable
 }
 
-/// Amount already filled (in SellCoin units).
 public fun filled_amount<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): u64 {
     intent.filled_amount
 }
 
-// === Test Helpers ===
-
-#[test_only]
-public fun lock_intent_for_testing<SellCoin, BuyCoin>(intent: &mut Intent<SellCoin, BuyCoin>) {
-    intent.locked = true;
+public fun intent_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): ID {
+    intent.id.to_inner()
 }
+
+// === Test Helpers ===
 
 #[test_only]
 public fun create_intent_for_testing<SellCoin, BuyCoin>(
@@ -250,12 +193,10 @@ public fun create_intent_for_testing<SellCoin, BuyCoin>(
     min_amount_out: u64,
     partial_fillable: bool,
     deadline: u64,
-    locked: bool,
     ctx: &mut TxContext,
 ): Intent<SellCoin, BuyCoin> {
     Intent<SellCoin, BuyCoin> {
         id: object::new(ctx),
-        locked,
         owner: ctx.sender(),
         sell_balance: balance::create_for_testing<SellCoin>(sell_amount),
         min_amount_out,
@@ -263,8 +204,4 @@ public fun create_intent_for_testing<SellCoin, BuyCoin>(
         filled_amount: 0,
         deadline,
     }
-}
-
-public fun intent_id<SellCoin, BuyCoin>(intent: &Intent<SellCoin, BuyCoin>): ID {
-    intent.id.to_inner()
 }

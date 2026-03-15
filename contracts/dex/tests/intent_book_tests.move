@@ -21,13 +21,13 @@ fun test_create_intent_fields() {
     {
         let ctx = ts::ctx(&mut scenario);
         let mut clock = clock::create_for_testing(ctx);
-        clock::set_for_testing(&mut clock, 0);
+        clock::set_for_testing(&mut clock, 5000);
 
         intent_book::create_intent<SUI, USDC>(
             coin::mint_for_testing<SUI>(500, ctx),
             200,
             true,
-            1000,
+            1000_000,
             &clock,
             ctx,
         );
@@ -39,11 +39,10 @@ fun test_create_intent_fields() {
     {
         let intent = ts::take_shared<Intent<SUI, USDC>>(&scenario);
 
-        assert!(intent_book::sell_amount(&intent) == 500);
-        assert!(intent_book::min_amount_out(&intent) == 200);
-        assert!(intent_book::deadline(&intent) == 1000);
-        assert!(intent_book::owner(&intent) == user);
-        assert!(!intent_book::locked(&intent));
+        assert!(intent.sell_amount() == 500);
+        assert!(intent.min_amount_out() == 200);
+        assert!(intent.deadline() == 1000_000);
+        assert!(intent.owner() == user);
 
         ts::return_shared(intent);
     };
@@ -101,7 +100,7 @@ fun test_cancel_intent_returns_coins() {
     {
         let intent = ts::take_shared<Intent<SUI, USDC>>(&scenario);
         let ctx = ts::ctx(&mut scenario);
-        intent_book::cancel_intent<SUI, USDC>(intent, ctx);
+        intent.cancel_intent<SUI, USDC>(ctx);
     };
 
     ts::next_tx(&mut scenario, user);
@@ -140,7 +139,7 @@ fun test_cancel_intent_wrong_owner_aborts() {
     {
         let intent = ts::take_shared<Intent<SUI, USDC>>(&scenario);
         let ctx = ts::ctx(&mut scenario);
-        intent_book::cancel_intent<SUI, USDC>(intent, ctx);
+        intent.cancel_intent<SUI, USDC>(ctx);
     };
 
     ts::end(scenario);
@@ -159,43 +158,18 @@ fun test_consume_intent_returns_correct_fields() {
         300,
         false,
         9999,
-        false,
         ctx,
     );
 
-    assert!(intent_book::sell_amount(&intent) == 750);
-    assert!(intent_book::min_amount_out(&intent) == 300);
+    assert!(intent.sell_amount() == 750);
+    assert!(intent.min_amount_out() == 300);
 
-    let (owner, out_balance, min_out) = intent_book::consume_intent<SUI, USDC>(intent);
+    let (owner, out_balance, min_out) = intent.consume_intent<SUI, USDC>();
 
     assert!(owner == user);
     assert!(min_out == 300);
     assert!(balance::value(&out_balance) == 750);
 
     std::unit_test::destroy(out_balance);
-    ts::end(scenario);
-}
-
-#[test]
-fun test_lock_intent_for_testing() {
-    let user = @0xA;
-    let mut scenario = ts::begin(user);
-    let ctx = ts::ctx(&mut scenario);
-
-    let mut intent = intent_book::create_intent_for_testing<SUI, USDC>(
-        100,
-        50,
-        false,
-        9999,
-        false,
-        ctx,
-    );
-
-    assert!(!intent_book::locked(&intent));
-
-    intent_book::lock_intent_for_testing(&mut intent);
-    assert!(intent_book::locked(&intent));
-
-    std::unit_test::destroy(intent);
     ts::end(scenario);
 }

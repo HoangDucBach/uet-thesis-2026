@@ -15,6 +15,7 @@ const DEFAULT_COMMIT_DURATION_MS: u64 = 15000; // 15 seconds
 const DEFAULT_GRACE_PERIOD_MS: u64 = 60000; // 60 seconds
 const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
 const DEFAULT_SCORE_TOLERANCE_BPS: u64 = 9_500; // 95% — tolerance for mid_price drift between commit and execute
+const DEFAULT_EPOCH_DURATION_MS: u64 = 10_000; // 10 seconds per epoch
 
 // === Upper Bounds (Overflow Protection) ===
 
@@ -22,6 +23,7 @@ const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1000 SUI
 const MAX_COMMIT_DURATION_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_GRACE_PERIOD_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_SCORE_TOLERANCE_BPS: u64 = 10_000; // 100% — tolerance cannot exceed full score
+const MAX_EPOCH_DURATION_MS: u64 = 3_600_000; // 1 hour in milliseconds
 
 // === ACL Roles ===
 
@@ -57,6 +59,9 @@ public struct ACL has store {
 /// * `score_tolerance_bps`: Minimum fraction of committed surplus that must be delivered,
 ///   expressed in basis points (e.g. 9500 = 95%). Accounts for mid_price drift between
 ///   commit and execute phases.
+/// * `epoch_duration_ms`: Length of one virtual epoch in milliseconds.
+///   Epoch ID = floor(T_now / epoch_duration_ms). Intents are stamped with their epoch
+///   at creation and can only be settled in a matching AuctionState.
 /// * `acl`: Access control list.
 /// * `version`: Protocol version for upgrade tracking.
 public struct GlobalConfig has key, store {
@@ -66,6 +71,7 @@ public struct GlobalConfig has key, store {
     grace_period_ms: u64,
     protocol_fee_bps: u64,
     score_tolerance_bps: u64,
+    epoch_duration_ms: u64,
     acl: ACL,
     version: u64,
 }
@@ -102,6 +108,12 @@ public struct UpdateScoreToleranceEvent has copy, drop {
     new_value: u64,
 }
 
+/// Emitted when epoch duration is updated.
+public struct UpdateEpochDurationEvent has copy, drop {
+    old_value: u64,
+    new_value: u64,
+}
+
 /// Emitted when role is granted to an address.
 public struct RoleGrantedEvent has copy, drop {
     address: address,
@@ -131,6 +143,7 @@ fun init(ctx: &mut TxContext) {
         grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
         protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
         score_tolerance_bps: DEFAULT_SCORE_TOLERANCE_BPS,
+        epoch_duration_ms: DEFAULT_EPOCH_DURATION_MS,
         acl: ACL { members: table::new(ctx) },
         version: INITIAL_VERSION,
     };
@@ -230,6 +243,27 @@ public fun set_score_tolerance(
     });
 }
 
+/// Update virtual epoch duration.
+/// * `config`: The GlobalConfig.
+/// * `new_epoch_duration_ms`: New epoch length in milliseconds (1–3_600_000).
+/// * `_cap`: AdminCap for authorization.
+public fun set_epoch_duration(
+    config: &mut GlobalConfig,
+    new_epoch_duration_ms: u64,
+    _cap: &AdminCap,
+) {
+    assert!(new_epoch_duration_ms > 0, EInvalidDuration);
+    assert!(new_epoch_duration_ms <= MAX_EPOCH_DURATION_MS, EInvalidDuration);
+
+    let old_value = config.epoch_duration_ms;
+    config.epoch_duration_ms = new_epoch_duration_ms;
+
+    emit(UpdateEpochDurationEvent {
+        old_value,
+        new_value: new_epoch_duration_ms,
+    });
+}
+
 /// Grant a role to an address.
 /// * `config`: The GlobalConfig.
 /// * `address`: Address to grant role to.
@@ -239,11 +273,11 @@ public fun grant_role(config: &mut GlobalConfig, address: address, role: u64, _c
     assert!(role == ROLE_CONFIG_ADMIN, EUnauthorized);
 
     let acl = &mut config.acl;
-    if (!table::contains(&acl.members, address)) {
-        table::add(&mut acl.members, address, vector::empty());
+    if (!acl.members.contains(address)) {
+        acl.members.add(address, vector::empty());
     };
 
-    let roles = table::borrow_mut(&mut acl.members, address);
+    let roles = acl.members.borrow_mut(address);
     if (!vector::contains(roles, &role)) {
         vector::push_back(roles, role);
     };
@@ -260,11 +294,11 @@ public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _
     assert!(role == ROLE_CONFIG_ADMIN, EUnauthorized);
 
     let acl = &mut config.acl;
-    if (!table::contains(&acl.members, address)) {
+    if (!acl.members.contains(address)) {
         return
     };
 
-    let roles = table::borrow_mut(&mut acl.members, address);
+    let roles = acl.members.borrow_mut(address);
     let mut idx = 0;
     let len = vector::length(roles);
     let mut found_idx = len;
@@ -292,10 +326,10 @@ public fun revoke_role(config: &mut GlobalConfig, address: address, role: u64, _
 /// * `role`: Role ID to check.
 public fun has_role(config: &GlobalConfig, address: address, role: u64): bool {
     let acl = &config.acl;
-    if (!table::contains(&acl.members, address)) {
+    if (!acl.members.contains(address)) {
         return false
     };
-    let roles = table::borrow(&acl.members, address);
+    let roles = acl.members.borrow(address);
     vector::contains(roles, &role)
 }
 
@@ -333,6 +367,11 @@ public fun score_tolerance_bps(config: &GlobalConfig): u64 {
     config.score_tolerance_bps
 }
 
+/// Get virtual epoch duration in milliseconds.
+public fun epoch_duration_ms(config: &GlobalConfig): u64 {
+    config.epoch_duration_ms
+}
+
 /// Get current version.
 public fun version(config: &GlobalConfig): u64 {
     config.version
@@ -361,6 +400,9 @@ public fun default_protocol_fee_bps(): u64 { DEFAULT_PROTOCOL_FEE_BPS }
 public fun default_score_tolerance_bps(): u64 { DEFAULT_SCORE_TOLERANCE_BPS }
 
 #[test_only]
+public fun default_epoch_duration_ms(): u64 { DEFAULT_EPOCH_DURATION_MS }
+
+#[test_only]
 public fun max_protocol_fee_bps(): u64 { MAX_PROTOCOL_FEE_BPS }
 
 #[test_only]
@@ -376,6 +418,7 @@ public fun create_for_testing(ctx: &mut TxContext): (GlobalConfig, AdminCap) {
         grace_period_ms: DEFAULT_GRACE_PERIOD_MS,
         protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
         score_tolerance_bps: DEFAULT_SCORE_TOLERANCE_BPS,
+        epoch_duration_ms: DEFAULT_EPOCH_DURATION_MS,
         acl: ACL { members: table::new(ctx) },
         version: INITIAL_VERSION,
     };
