@@ -14,7 +14,7 @@ const DEFAULT_MIN_BOND: u64 = 1_000; // 0.000001 SUI
 const DEFAULT_COMMIT_DURATION_MS: u64 = 15000; // 15 seconds
 const DEFAULT_GRACE_PERIOD_MS: u64 = 60000; // 60 seconds
 const DEFAULT_PROTOCOL_FEE_BPS: u64 = 100; // 1% (100 bps)
-const DEFAULT_SCORE_TOLERANCE_BPS: u64 = 9_500; // 95% — tolerance for mid_price drift between commit and execute
+const DEFAULT_SCORE_TOLERANCE_BPS: u64 = 9_500; // 95% - tolerance for mid_price drift between commit and execute
 const DEFAULT_EPOCH_DURATION_MS: u64 = 10_000; // 10 seconds per epoch
 
 // === Upper Bounds (Overflow Protection) ===
@@ -22,7 +22,7 @@ const DEFAULT_EPOCH_DURATION_MS: u64 = 10_000; // 10 seconds per epoch
 const MAX_MIN_BOND: u64 = 1_000_000_000_000; // 1000 SUI
 const MAX_COMMIT_DURATION_MS: u64 = 604_800_000; // 7 days in milliseconds
 const MAX_GRACE_PERIOD_MS: u64 = 604_800_000; // 7 days in milliseconds
-const MAX_SCORE_TOLERANCE_BPS: u64 = 10_000; // 100% — tolerance cannot exceed full score
+const MAX_SCORE_TOLERANCE_BPS: u64 = 10_000; // 100% - tolerance cannot exceed full score
 const MAX_EPOCH_DURATION_MS: u64 = 3_600_000; // 1 hour in milliseconds
 
 // === ACL Roles ===

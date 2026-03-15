@@ -35,7 +35,7 @@ public struct IntentCancelledEvent has copy, drop {
 
 // === Structs ===
 
-/// Shared object — user's coins locked inside until settlement or cancellation.
+/// Shared object - user's coins locked inside until settlement or cancellation.
 ///
 /// * `id`: Shared object ID.
 /// * `owner`: User address.
@@ -43,7 +43,7 @@ public struct IntentCancelledEvent has copy, drop {
 /// * `min_amount_out`: User's minimum acceptable output.
 /// * `partial_fillable`: Whether this intent allows partial fills.
 /// * `filled_amount`: How much has been filled so far (in SellCoin units).
-/// * `deadline`: Unix milliseconds — intent expires after this.
+/// * `deadline`: Unix milliseconds - intent expires after this.
 public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
     id: UID,
     owner: address,
@@ -57,7 +57,7 @@ public struct Intent<phantom SellCoin, phantom BuyCoin> has key {
 // === Package-visible functions (called via settlement module) ===
 
 /// Create a new intent, lock coins, share on-chain. Returns the intent ID.
-/// Called by settlement::submit_intent — not directly by users.
+/// Called by settlement::submit_intent - not directly by users.
 public(package) fun create_intent<SellCoin, BuyCoin>(
     coin: Coin<SellCoin>,
     min_amount_out: u64,

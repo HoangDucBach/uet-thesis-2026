@@ -225,7 +225,7 @@ public fun deregister_solver(
 /// Advance to the next epoch's commit phase (permissionless).
 ///
 /// Clears committed set and resets phase to Commit.
-/// Does NOT clear intent_ids — partial fill intents carry over automatically.
+/// Does NOT clear intent_ids - partial fill intents carry over automatically.
 public fun advance_epoch(state: &mut AuctionState, config: &GlobalConfig, clock: &Clock) {
     let now = clock.timestamp_ms();
     let is_timed_out_commit = state.phase == AuctionPhase::Commit && now >= state.commit_end_ms;
@@ -255,7 +255,7 @@ public fun advance_epoch(state: &mut AuctionState, config: &GlobalConfig, clock:
     state.winner_score = 0;
     state.runner_up_score = 0;
     state.current_epoch_surplus = 0;
-    // intent_ids intentionally NOT cleared — partial fills carry over
+    // intent_ids intentionally NOT cleared - partial fills carry over
 
     emit(EpochStartedEvent {
         epoch_id: settling_epoch,
@@ -304,7 +304,7 @@ public fun commit(
 
 /// Take all sell assets from intent selling Base (full fill).
 /// Removes intent ID from AuctionState.intent_ids.
-/// Returns (Coin<Base>, IntentReceipt) — receipt must be consumed by settle_intent_base_to_quote.
+/// Returns (Coin<Base>, IntentReceipt) - receipt must be consumed by settle_intent_base_to_quote.
 public fun take_intent_base_to_quote<Base, Quote>(
     registry: &SolverRegistry,
     state: &mut AuctionState,
@@ -364,7 +364,7 @@ public fun take_intent_partial_base_to_quote<Base, Quote>(
     assert_settle_authorized(registry, state, config, clock, ctx);
     let id = intent.intent_id();
     assert!(state.intent_ids.contains(&id), ENotInBatch);
-    // Do NOT remove from intent_ids — remaining balance carries over to next epoch
+    // Do NOT remove from intent_ids - remaining balance carries over to next epoch
 
     let (owner, partial_balance, proportional_min_out) = intent.consume_intent_partial(fill_amount);
     let receipt = IntentReceipt<Base, Quote> {
@@ -389,7 +389,7 @@ public fun take_intent_partial_quote_to_base<Base, Quote>(
     assert_settle_authorized(registry, state, config, clock, ctx);
     let id = intent.intent_id();
     assert!(state.intent_ids.contains(&id), ENotInBatch);
-    // Do NOT remove from intent_ids — remaining balance carries over to next epoch
+    // Do NOT remove from intent_ids - remaining balance carries over to next epoch
 
     let (owner, partial_balance, proportional_min_out) = intent.consume_intent_partial(fill_amount);
     let receipt = IntentReceipt<Quote, Base> {
@@ -400,7 +400,7 @@ public fun take_intent_partial_quote_to_base<Base, Quote>(
     (partial_balance.into_coin(ctx), receipt)
 }
 
-/// Settle an intent that sold Base — verify payout, pay user, accumulate surplus.
+/// Settle an intent that sold Base - verify payout, pay user, accumulate surplus.
 public fun settle_intent_base_to_quote<Base, Quote>(
     state: &mut AuctionState,
     receipt: IntentReceipt<Base, Quote>,
@@ -415,7 +415,7 @@ public fun settle_intent_base_to_quote<Base, Quote>(
     transfer::public_transfer(payout, owner);
 }
 
-/// Settle an intent that sold Quote — verify payout, pay user, accumulate surplus.
+/// Settle an intent that sold Quote - verify payout, pay user, accumulate surplus.
 public fun settle_intent_quote_to_base<Base, Quote>(
     state: &mut AuctionState,
     receipt: IntentReceipt<Quote, Base>,
